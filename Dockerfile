@@ -22,9 +22,13 @@ RUN pip install --no-cache-dir "torch==2.8.0" "torchaudio==2.8.0" \
         --index-url https://download.pytorch.org/whl/cu128
 
 # SOLO audio-separator (NIENTE demucs). + runtime RunPod.
-RUN pip install --no-cache-dir "audio-separator[gpu]" runpod requests boto3 \
-    && pip uninstall -y onnxruntime-gpu || true \
-    && pip install --no-cache-dir onnxruntime
+# SOLO audio-separator (NIENTE demucs). + runtime RunPod.
+# onnxruntime-gpu per CUDA 12.x (il base image e' cu128): NON fare il downgrade
+# a CPU, altrimenti i Roformer girano su CPU (lentissimi). Teniamo la GPU.
+RUN pip install --no-cache-dir "audio-separator[gpu]" runpod requests boto3
+# Forza onnxruntime-gpu compatibile CUDA 12.x (1.19.2 supporta cu12).
+RUN pip uninstall -y onnxruntime onnxruntime-gpu || true \
+    && pip install --no-cache-dir onnxruntime-gpu==1.19.2
 # Reinstalla torch/torchaudio FISSI in caso audio-separator li abbia toccati.
 RUN pip install --no-cache-dir --force-reinstall "torch==2.8.0" "torchaudio==2.8.0" \
         --index-url https://download.pytorch.org/whl/cu128
