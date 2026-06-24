@@ -1,15 +1,18 @@
 """
 rp_handler.py — Handler RunPod per l'endpoint KARAOKECREATOR (snello).
-
-Fa SOLO: separazione voce+strumenti (pipeline.py Roformer) -> export mp3 320 ->
+Fa SOLO: separazione voce+strumenti (pipeline.py Roformer) -> export mp3 ->
 zip -> upload FTP -> link. NIENTE accordi (madmom non e' in questa immagine).
-
 Input:  { "audio_url": "https://..." }  oppure  { "audio_base64": "..." }
 Output: { "stems": [...], "download_url": "https://.../<job>.zip" }
-
 Env dell'endpoint: FTP_HOST, FTP_USER, FTP_PASS, FTP_DIR, PUBLIC_BASE_URL
-"""
 
+NOTE VELOCITA' (questa versione):
+ - I due encode mp3 girano IN PARALLELO (non in sequenza): ~meta' tempo.
+ - NIENTE loudnorm qui: KC normalizza gia' lui in fase 2 (_normalize_audio).
+   Farlo anche qui era doppio lavoro e rallentava molto l'encode.
+ - base_piu_cori -> 320k (la ascolta l'utente).
+ - lead_riferimento -> 128k MONO (va SOLO alla trascrizione: 320k era spreco).
+"""
 import base64
 import ftplib
 import os
@@ -17,7 +20,6 @@ import subprocess
 import uuid
 import zipfile
 from pathlib import Path
-
 import requests
 import runpod
 
@@ -58,29 +60,45 @@ def _ftp_upload(local_file: Path, remote_name: str) -> str:
     return f"{PUBLIC_BASE_URL.rstrip('/')}/{remote_name}"
 
 
+def _encode_args(wav: Path, mp3: Path):
+    """Argomenti ffmpeg per ogni stem.
+    - lead_riferimento: 128k MONO (solo trascrizione) -> encode velocissimo.
+    - base_piu_cori (e ogni altro): 320k stereo (lo ascolta l'utente).
+    NIENTE loudnorm: lo fa KC in fase 2 (evita doppia normalizzazione lenta).
+    """
+    name = wav.stem.lower()
+    if "lead" in name or "vocal" in name or "voce" in name:
+        return ["ffmpeg", "-y", "-i", str(wav),
+                "-ac", "1", "-ar", "44100", "-b:a", "128k", str(mp3)]
+    return ["ffmpeg", "-y", "-i", str(wav),
+            "-ar", "44100", "-b:a", "320k", str(mp3)]
+
+
 def handler(job: dict) -> dict:
     job_id = job.get("id", uuid.uuid4().hex[:12])
     inp = job.get("input", {}) or {}
     d = WORK / job_id
-
     try:
         audio = _get_audio(d, inp)
 
-        # SEPARAZIONE (solo Roformer voce+strumenti)
+        # SEPARAZIONE (solo Roformer voce+strumenti, una passata)
         subprocess.run(["python", "/app/pipeline.py", str(audio)],
                        cwd=str(d), check=True)
         stems_dir = next(d.glob("stems_*"))
 
-        # EXPORT mp3 320 normalizzato
+        # EXPORT mp3 IN PARALLELO (niente loudnorm: lo fa KC)
         final = d / "final"
         final.mkdir(exist_ok=True)
+        procs = []
         for wav in sorted(stems_dir.glob("*.wav")):
             mp3 = final / f"{wav.stem}.mp3"
-            subprocess.run([
-                "ffmpeg", "-y", "-i", str(wav),
-                "-af", "loudnorm=I=-14:TP=-1:LRA=11",
-                "-ar", "44100", "-b:a", "320k", str(mp3),
-            ], check=True)
+            procs.append((subprocess.Popen(_encode_args(wav, mp3),
+                                           stdout=subprocess.DEVNULL,
+                                           stderr=subprocess.DEVNULL), wav, mp3))
+        for p, wav, mp3 in procs:
+            rc = p.wait()
+            if rc != 0 or not mp3.exists() or mp3.stat().st_size == 0:
+                raise RuntimeError(f"encode fallito per {wav.name} (rc={rc})")
 
         # ZIP
         zip_path = d / "result.zip"
@@ -90,13 +108,11 @@ def handler(job: dict) -> dict:
 
         # UPLOAD via FTP -> link col tuo dominio
         url = _ftp_upload(zip_path, f"{job_id}.zip")
-
         return {
             "stems": [p.name for p in sorted(final.glob("*.mp3"))],
             "chords": False,
             "download_url": url,
         }
-
     except subprocess.CalledProcessError as e:
         return {"error": f"Step fallito: {e}"}
     except Exception as e:  # noqa: BLE001
