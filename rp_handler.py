@@ -17,11 +17,16 @@ import base64
 import ftplib
 import os
 import subprocess
+import time
 import uuid
 import zipfile
 from pathlib import Path
 import requests
 import runpod
+
+# UA "da browser": alcuni hosting (WAF/ModSecurity) bloccano con 403 lo UA
+# di default 'python-requests/*'. Con questo lo scaricamento di audio_url passa.
+_DL_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; KaraokeCreator/1.0)"}
 
 WORK = Path("/tmp/jobs")
 WORK.mkdir(parents=True, exist_ok=True)
@@ -39,10 +44,22 @@ def _get_audio(job_dir: Path, inp: dict) -> Path:
         url = inp["audio_url"]
         suffix = Path(url.split("?")[0]).suffix or ".wav"
         dst = job_dir / f"input{suffix}"
-        r = requests.get(url, timeout=180)
-        r.raise_for_status()
-        dst.write_bytes(r.content)
-        return dst
+        last = None
+        for attempt in range(3):
+            try:
+                with requests.get(url, timeout=180, headers=_DL_HEADERS, stream=True) as r:
+                    r.raise_for_status()
+                    with dst.open("wb") as f:
+                        for chunk in r.iter_content(chunk_size=1 << 16):
+                            if chunk:
+                                f.write(chunk)
+                if dst.exists() and dst.stat().st_size > 0:
+                    return dst
+                last = "file scaricato vuoto"
+            except Exception as e:
+                last = e
+            time.sleep(2 * (attempt + 1))
+        raise RuntimeError(f"download audio_url fallito: {last}")
     if "audio_base64" in inp:
         dst = job_dir / "input.wav"
         dst.write_bytes(base64.b64decode(inp["audio_base64"]))
