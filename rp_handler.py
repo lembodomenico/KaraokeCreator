@@ -2,8 +2,8 @@
 rp_handler.py — Handler RunPod per l'endpoint KARAOKECREATOR (snello).
 Fa SOLO: separazione voce+strumenti (pipeline.py Roformer) -> export mp3 ->
 zip -> upload FTP -> link. NIENTE accordi (madmom non e' in questa immagine).
-Input:  { "audio_url": "https://..." }  oppure  { "audio_base64": "..." }
-Output: { "stems": [...], "download_url": "https://.../<job>.zip" }
+Input:  { "audio_url": "https://...", "lyrics": "<testo opzionale>" }
+Output: { "stems": [...], "download_url": "...", "timestamps": [...] }
 Env dell'endpoint: FTP_HOST, FTP_USER, FTP_PASS, FTP_DIR, PUBLIC_BASE_URL
 
 NOTE VELOCITA' (questa versione):
@@ -103,6 +103,30 @@ def handler(job: dict) -> dict:
                        cwd=str(d), check=True)
         stems_dir = next(d.glob("stems_*"))
 
+        # === LAM: allineamento testo sul cantato (solo se il server ha passato
+        # "lyrics"). Gira sullo STESSO worker gia' caldo -> nessun cold start in
+        # piu'. Fail-safe: qualsiasi problema -> timestamps=None, il server usa
+        # il suo fallback (Scribe). ===
+        timestamps = None
+        testo = (inp.get("lyrics") or "").strip()
+        if testo:
+            vocals_wav = None
+            for wav in stems_dir.glob("*.wav"):
+                n = wav.stem.lower()
+                if "lead" in n or "vocal" in n or "voce" in n:
+                    vocals_wav = wav
+                    break
+            if vocals_wav is not None:
+                try:
+                    import lam_align
+                    sd = lam_align.align_as_scribe_data(str(vocals_wav), testo, "/app/lam")
+                    if sd.get("ok") and sd.get("words"):
+                        timestamps = sd["words"]
+                    else:
+                        timestamps = {"ok": False, "reason": sd.get("reason")}
+                except Exception as _e:
+                    timestamps = {"ok": False, "reason": f"LAM errore: {_e}"}
+
         # EXPORT mp3 IN PARALLELO (niente loudnorm: lo fa KC)
         final = d / "final"
         final.mkdir(exist_ok=True)
@@ -129,6 +153,7 @@ def handler(job: dict) -> dict:
             "stems": [p.name for p in sorted(final.glob("*.mp3"))],
             "chords": False,
             "download_url": url,
+            "timestamps": timestamps,
         }
     except subprocess.CalledProcessError as e:
         return {"error": f"Step fallito: {e}"}

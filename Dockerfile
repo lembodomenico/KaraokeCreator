@@ -37,6 +37,14 @@ RUN pip install --no-cache-dir --force-reinstall "torch==2.8.0" "torchaudio==2.8
 RUN audio-separator --download_model_only -m mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt || true
 RUN audio-separator --download_model_only -m mel_band_roformer_karaoke_gabox_v2.ckpt || true
 
+# --- LAM: allineamento testo sul cantato (gira sullo STESSO worker gia' caldo:
+# nessun cold start in piu'). espeak-ng NATIVO via apt (Ubuntu root) -> niente
+# compile/glibc/TMPDIR-noexec come sul CloudLinux. ---
+RUN apt-get update && apt-get install -y --no-install-recommends espeak-ng     && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir transformers phonemizer sortedcontainers         librosa soundfile tqdm pandas scipy langdetect
+COPY lam_local.py lam_align.py /app/
+COPY lam/ /app/lam/
+
 # Codice: pipeline snella + handler. NIENTE accordi.py.
 COPY pipeline.py rp_handler.py /app/
 
