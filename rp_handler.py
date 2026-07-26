@@ -109,9 +109,15 @@ def _get_whisper():
 
 
 def whisper_transcribe(vocals_path: str, lang=None) -> str:
-    """Ritorna il testo trascritto dalla voce isolata (stringa). lang=None -> auto-detect."""
+    """Ritorna il testo trascritto dalla voce isolata (stringa). lang=None -> auto-detect.
+    condition_on_previous_text=False: NON collassa i ritornelli ripetitivi (di default
+    Whisper evita di ripetersi e "riassume" i loop ossessivi -> meno parole del cantato
+    -> LAM deraglia). Cosi' trascrive ogni segmento indipendente e cattura le ripetizioni."""
     model = _get_whisper()
-    segs, _info = model.transcribe(vocals_path, language=lang, beam_size=5, vad_filter=True)
+    segs, _info = model.transcribe(
+        vocals_path, language=lang, beam_size=5, vad_filter=True,
+        condition_on_previous_text=False,
+    )
     return " ".join((s.text or "").strip() for s in segs).strip()
 
 
