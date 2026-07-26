@@ -515,6 +515,20 @@ def align_words(vocals_path, text, synced_lyrics=None, ffmpeg="ffmpeg"):
     big = [g for g in gaps if g > 10.0]
     span = (starts[-1] - starts[0]) if len(starts) > 1 else 0.0
     ok = not (len(big) > 3 or (span > 0 and sum(big) > 0.35 * span))
+    # RILEVAMENTO "meno parole del cantato": se dentro un buco dell'allineamento (>4s)
+    # ci sono ATTACCHI VOCALI (la voce canta ma nessuna parola e' li'), il testo e'
+    # incompleto/deragliato. Segnalo ok=False -> il server cerca un testo migliore
+    # (LRCLIB/karadom) e riallinea; se non trova nulla resta su DomAI puro.
+    _canto_muto = 0
+    if _note_ons is not None and len(_note_ons):
+        for _i in range(1, len(starts)):
+            if starts[_i] - starts[_i - 1] > 4.0:
+                _in = [o for o in _note_ons if starts[_i - 1] + 0.6 < o < starts[_i] - 0.6]
+                if len(_in) >= 4:
+                    _canto_muto += 1
+        if _canto_muto:
+            ok = False
+            _LOG(f"[DomAI] rilevate MENO parole del cantato: {_canto_muto} tratti cantati senza testo")
     info = {"ok": ok, "score": round(score, 1), "anchored": n_anch,
             "sync_frac": round(sync_frac, 3),
             "big_gaps": [round(g, 1) for g in big],
