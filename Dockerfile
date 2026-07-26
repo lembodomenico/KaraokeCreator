@@ -45,6 +45,12 @@ RUN pip install --no-cache-dir transformers phonemizer sortedcontainers         
 COPY lam_local.py lam_align.py /app/
 COPY lam/ /app/lam/
 
+# --- DomAI: Whisper (faster-whisper) per TRASCRIVERE quando manca il testo.
+# Gira sullo STESSO worker gia' caldo (GPU). Il modello e' pre-scaricato
+# nell'immagine -> niente download a runtime (no cold-start extra). ---
+RUN pip install --no-cache-dir faster-whisper
+RUN python -c "from faster_whisper import WhisperModel; WhisperModel('large-v3-turbo', device='cpu', compute_type='int8')" || true
+
 # Codice: pipeline snella + handler. NIENTE accordi.py.
 COPY pipeline.py rp_handler.py /app/
 

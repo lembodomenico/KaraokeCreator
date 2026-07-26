@@ -91,6 +91,30 @@ def _encode_args(wav: Path, mp3: Path):
             "-ar", "44100", "-b:a", "320k", str(mp3)]
 
 
+# === DomAI: Whisper (faster-whisper) — trascrive la voce isolata quando il
+# server NON passa un testo. Modello caricato una sola volta (cache globale),
+# sulla GPU del pod (fallback CPU se cuda non disponibile). ===
+_WHISPER = None
+
+
+def _get_whisper():
+    global _WHISPER
+    if _WHISPER is None:
+        from faster_whisper import WhisperModel
+        try:
+            _WHISPER = WhisperModel("large-v3-turbo", device="cuda", compute_type="int8")
+        except Exception:
+            _WHISPER = WhisperModel("large-v3-turbo", device="cpu", compute_type="int8")
+    return _WHISPER
+
+
+def whisper_transcribe(vocals_path: str, lang=None) -> str:
+    """Ritorna il testo trascritto dalla voce isolata (stringa). lang=None -> auto-detect."""
+    model = _get_whisper()
+    segs, _info = model.transcribe(vocals_path, language=lang, beam_size=5, vad_filter=True)
+    return " ".join((s.text or "").strip() for s in segs).strip()
+
+
 def handler(job: dict) -> dict:
     job_id = job.get("id", uuid.uuid4().hex[:12])
     inp = job.get("input", {}) or {}
@@ -109,23 +133,36 @@ def handler(job: dict) -> dict:
         # il suo fallback (Scribe). ===
         timestamps = None
         testo = (inp.get("lyrics") or "").strip()
-        if testo:
-            vocals_wav = None
-            for wav in stems_dir.glob("*.wav"):
-                n = wav.stem.lower()
-                if "lead" in n or "vocal" in n or "voce" in n:
-                    vocals_wav = wav
-                    break
-            if vocals_wav is not None:
-                try:
-                    import lam_align
-                    sd = lam_align.align_as_scribe_data(str(vocals_wav), testo, "/app/lam")
-                    if sd.get("ok") and sd.get("words"):
-                        timestamps = sd["words"]
-                    else:
-                        timestamps = {"ok": False, "reason": sd.get("reason")}
-                except Exception as _e:
-                    timestamps = {"ok": False, "reason": f"LAM errore: {_e}"}
+        testo_da_whisper = False
+        # voce isolata: serve sia a Whisper (trascrizione) sia a LAM (allineamento)
+        vocals_wav = None
+        for wav in stems_dir.glob("*.wav"):
+            n = wav.stem.lower()
+            if "lead" in n or "vocal" in n or "voce" in n:
+                vocals_wav = wav
+                break
+
+        # DomAI: se il server NON ha passato un testo, lo trascrive Whisper (GPU
+        # del pod) invece di ripiegare su Scribe. Poi LAM allinea come sempre.
+        if not testo and vocals_wav is not None:
+            try:
+                testo = whisper_transcribe(str(vocals_wav), inp.get("lang") or None)
+                testo_da_whisper = bool(testo)
+            except Exception as _e:
+                testo = ""
+
+        # LAM: allinea il testo (fornito dal server o trascritto da Whisper) sul
+        # cantato. Fail-safe: qualsiasi problema -> timestamps=None.
+        if testo and vocals_wav is not None:
+            try:
+                import lam_align
+                sd = lam_align.align_as_scribe_data(str(vocals_wav), testo, "/app/lam")
+                if sd.get("ok") and sd.get("words"):
+                    timestamps = sd["words"]
+                else:
+                    timestamps = {"ok": False, "reason": sd.get("reason")}
+            except Exception as _e:
+                timestamps = {"ok": False, "reason": f"LAM errore: {_e}"}
 
         # EXPORT mp3 IN PARALLELO (niente loudnorm: lo fa KC)
         final = d / "final"
@@ -154,6 +191,8 @@ def handler(job: dict) -> dict:
             "chords": False,
             "download_url": url,
             "timestamps": timestamps,
+            "text": testo or None,                     # testo usato (fornito o Whisper)
+            "text_source": "whisper" if testo_da_whisper else ("lyrics" if testo else None),
         }
     except subprocess.CalledProcessError as e:
         return {"error": f"Step fallito: {e}"}
