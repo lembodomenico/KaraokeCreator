@@ -406,13 +406,30 @@ def align_words(vocals_path, text, synced_lyrics=None, ffmpeg="ffmpeg"):
         _LOG(f"[LAM] step 3/3 ok in {_t.time()-_t0:.1f}s (score={score:.1f})")
         if len(raw) != len(words):
             raw = (raw + [(raw[-1] if raw else (0, 0))] * len(words))[:len(words)]
+        # onset di NOTA (calcolati PRIMA che il tempdir venga rimosso: servono sotto)
+        _note_ons = None
+        try:
+            _note_ons = _note_onsets(wavp)
+        except Exception:
+            _note_ons = None
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
     starts = [t[0] for t in raw]
 
-    # LAM PURO: nessun VAD, nessuno snap onset. L'unica correzione sono i tempi
-    # synced sulle PRIME PAROLE di riga (sotto).
+    # ONSET-SNAP: il modello LAM marca la sillaba DOPO l'attacco percettivo della
+    # nota (soprattutto su code/melisma di fine frase) -> le parole finali vanno in
+    # ritardo. Le riaggancio all'attacco di nota reale (conservativo: max 0.30s, mai
+    # oltre la parola precedente). Disattivabile con env LAM_SNAP_ONSET=0.
+    if os.environ.get("LAM_SNAP_ONSET", "1") == "1" and _note_ons is not None and len(_note_ons):
+        try:
+            starts, _mv = _snap_to_note_onsets(starts, _note_ons, max_shift=0.30)
+            _LOG(f"[DomAI] onset-snap: {_mv} attacchi riagganciati alla nota")
+        except Exception:
+            pass
+
+    # Le correzioni synced (tempi umani LRCLIB) sulle PRIME PAROLE di riga restano
+    # prioritarie sotto.
 
     # === SYNCED: SOLO LA PRIMA PAROLA DI OGNI RIGA ===
     # Il tempo synced di LRCLIB indica quando ATTACCA la riga: si sposta SOLO la
