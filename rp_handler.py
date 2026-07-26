@@ -164,6 +164,25 @@ def handler(job: dict) -> dict:
             except Exception as _e:
                 timestamps = {"ok": False, "reason": f"LAM errore: {_e}"}
 
+        # DomAI: se il testo FORNITO non ha allineato bene (score basso / testo
+        # bucato o incompleto) e non era gia' una trascrizione, DomAI trascrive lui
+        # la voce e riallinea -> "rileva da solo le parole" anche col testo scarso.
+        _lam_ok = isinstance(timestamps, list) and len(timestamps) > 0
+        if not _lam_ok and not testo_da_whisper and vocals_wav is not None:
+            try:
+                import lam_align
+                _t2 = whisper_transcribe(str(vocals_wav), inp.get("lang") or None)
+                if _t2:
+                    testo = _t2
+                    testo_da_whisper = True
+                    sd = lam_align.align_as_scribe_data(str(vocals_wav), testo, "/app/lam")
+                    if sd.get("ok") and sd.get("words"):
+                        timestamps = sd["words"]
+                    else:
+                        timestamps = {"ok": False, "reason": sd.get("reason")}
+            except Exception as _e:
+                pass
+
         # EXPORT mp3 IN PARALLELO (niente loudnorm: lo fa KC)
         final = d / "final"
         final.mkdir(exist_ok=True)
