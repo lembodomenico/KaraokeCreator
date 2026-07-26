@@ -33,7 +33,10 @@ RUN pip uninstall -y onnxruntime onnxruntime-gpu || true \
 RUN pip install --no-cache-dir --force-reinstall "torch==2.8.0" "torchaudio==2.8.0" \
         --index-url https://download.pytorch.org/whl/cu128
 
-# Pre-download dei 2 modelli Roformer karaoke NELL'IMMAGINE (no download a runtime)
+# Pre-download dei modelli NELL'IMMAGINE (no download a runtime).
+# STEP A (voce completa lead+cori per la trascrizione): UVR-MDX-NET-Inst_HQ_3.
+# STEP B (base+cori per il karaoke): roformer karaoke gabox_v2 (aufr33 di scorta).
+RUN audio-separator --download_model_only -m UVR-MDX-NET-Inst_HQ_3.onnx || true
 RUN audio-separator --download_model_only -m mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt || true
 RUN audio-separator --download_model_only -m mel_band_roformer_karaoke_gabox_v2.ckpt || true
 
