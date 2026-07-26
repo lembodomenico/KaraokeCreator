@@ -428,6 +428,36 @@ def align_words(vocals_path, text, synced_lyrics=None, ffmpeg="ffmpeg"):
         except Exception:
             pass
 
+    # ANTI-DERAGLIAMENTO: su testi RIPETITIVI (ritornelli ossessivi con frasi
+    # identiche di fila) il viterbi di LAM puo' AMMASSARE molte sillabe in pochi
+    # decimi di secondo tra due gap enormi. Rilevo i "run collassati" (>=6 sillabe
+    # con inter-onset < 0.06s = fisicamente impossibile da cantare) e li
+    # ridistribuisco uniformemente nell'intervallo reale tra la parola buona prima
+    # e quella buona dopo. Disattivabile con env LAM_ANTIRAIL=0.
+    if os.environ.get("LAM_ANTIRAIL", "1") == "1" and len(starts) > 6:
+        try:
+            n = len(starts)
+            i = 0
+            fixed_runs = 0
+            while i < n:
+                j = i
+                while j + 1 < n and (starts[j + 1] - starts[j]) < 0.06:
+                    j += 1
+                run = j - i + 1
+                if run >= 6:
+                    t0 = starts[i - 1] if i > 0 else starts[i]
+                    t1 = starts[j + 1] if j + 1 < n else (starts[j] + 2.0)
+                    if t1 - t0 > 1.0:
+                        step = (t1 - t0) / (run + 1)
+                        for k in range(run):
+                            starts[i + k] = t0 + step * (k + 1)
+                        fixed_runs += 1
+                i = j + 1
+            if fixed_runs:
+                _LOG(f"[DomAI] anti-deragliamento: {fixed_runs} run ripetitivi ridistribuiti")
+        except Exception:
+            pass
+
     # Le correzioni synced (tempi umani LRCLIB) sulle PRIME PAROLE di riga restano
     # prioritarie sotto.
 
