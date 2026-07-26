@@ -133,14 +133,24 @@ def handler(job: dict) -> dict:
                        cwd=str(d), check=True)
         stems_dir = next(d.glob("stems_*"))
 
-        # === LAM: allineamento testo sul cantato (solo se il server ha passato
-        # "lyrics"). Gira sullo STESSO worker gia' caldo -> nessun cold start in
-        # piu'. Fail-safe: qualsiasi problema -> timestamps=None, il server usa
-        # il suo fallback (Scribe). ===
+        # === DomAI: trascrizione + allineamento del cantato ===
+        # FLUSSO (deciso con l'utente):
+        #  1. DomAI (Whisper, GPU del pod) trascrive SEMPRE la voce isolata: e' il
+        #     "cantato reale" di riferimento, e conta quante parole ci sono davvero.
+        #  2. Il testo ONLINE che il server ha gia' scelto (inp["lyrics"]) si usa
+        #     SOLO SE COPRE il cantato, cioe' ha almeno ~quante parole ne ha sentite
+        #     DomAI. Cosi' NON si prende piu' un testo con MENO parole del cantato
+        #     (il controsenso). Se copre -> parole "pulite" dal testo scritto.
+        #  3. Se il testo online NON copre (o non c'e') -> resta DomAI puro.
+        #  4. LAM allinea il testo scelto sul cantato.
+        # I timestamp DomAI vengono restituiti SEMPRE (anche se l'allineamento non
+        # copre tutto): il server li tiene come rete finale + puo' cercare altri
+        # testi (Genius/LyricsOvh) se sono segnalati incompleti.
         timestamps = None
-        testo = (inp.get("lyrics") or "").strip()
-        testo_da_whisper = False
-        # voce isolata: serve sia a Whisper (trascrizione) sia a LAM (allineamento)
+        timestamps_incomplete = False
+        testo = ""
+        text_source = None
+        testo_server = (inp.get("lyrics") or "").strip()
         vocals_wav = None
         for wav in stems_dir.glob("*.wav"):
             n = wav.stem.lower()
@@ -148,46 +158,51 @@ def handler(job: dict) -> dict:
                 vocals_wav = wav
                 break
 
-        # DomAI: se il server NON ha passato un testo, lo trascrive Whisper (GPU
-        # del pod) invece di ripiegare su Scribe. Poi LAM allinea come sempre.
-        if not testo and vocals_wav is not None:
-            try:
-                testo = whisper_transcribe(str(vocals_wav), inp.get("lang") or None)
-                testo_da_whisper = bool(testo)
-            except Exception as _e:
-                testo = ""
+        def _wc(s):
+            return len([w for w in (s or "").split() if w.strip()])
 
-        # LAM: allinea il testo (fornito dal server o trascritto da Whisper) sul
-        # cantato. Fail-safe: qualsiasi problema -> timestamps=None.
-        if testo and vocals_wav is not None:
-            try:
-                import lam_align
-                sd = lam_align.align_as_scribe_data(str(vocals_wav), testo, "/app/lam")
-                if sd.get("ok") and sd.get("words"):
-                    timestamps = sd["words"]
-                else:
-                    timestamps = {"ok": False, "reason": sd.get("reason")}
-            except Exception as _e:
-                timestamps = {"ok": False, "reason": f"LAM errore: {_e}"}
+        if vocals_wav is not None:
+            import lam_align
 
-        # DomAI: se il testo FORNITO non ha allineato bene (score basso / testo
-        # bucato o incompleto) e non era gia' una trascrizione, DomAI trascrive lui
-        # la voce e riallinea -> "rileva da solo le parole" anche col testo scarso.
-        _lam_ok = isinstance(timestamps, list) and len(timestamps) > 0
-        if not _lam_ok and not testo_da_whisper and vocals_wav is not None:
+            def _align(_txt):
+                """Allinea _txt sul cantato. Ritorna (words|None, ok:bool)."""
+                if not _txt:
+                    return None, False
+                try:
+                    sd = lam_align.align_as_scribe_data(str(vocals_wav), _txt, "/app/lam")
+                    _w = sd.get("words") or []
+                    return (_w or None), bool(sd.get("ok") and _w)
+                except Exception:
+                    return None, False
+
+            # 1) DomAI trascrive SEMPRE (cantato reale)
+            testo_domai = ""
             try:
-                import lam_align
-                _t2 = whisper_transcribe(str(vocals_wav), inp.get("lang") or None)
-                if _t2:
-                    testo = _t2
-                    testo_da_whisper = True
-                    sd = lam_align.align_as_scribe_data(str(vocals_wav), testo, "/app/lam")
-                    if sd.get("ok") and sd.get("words"):
-                        timestamps = sd["words"]
-                    else:
-                        timestamps = {"ok": False, "reason": sd.get("reason")}
-            except Exception as _e:
-                pass
+                testo_domai = whisper_transcribe(str(vocals_wav), inp.get("lang") or None)
+            except Exception:
+                testo_domai = ""
+            n_domai = _wc(testo_domai)
+
+            # 2) scelta testo: online solo se COPRE (>= ~90% delle parole DomAI)
+            if testo_server and (n_domai == 0 or _wc(testo_server) >= 0.9 * n_domai):
+                testo, text_source = testo_server, "lyrics"
+            else:
+                testo, text_source = testo_domai, ("whisper" if testo_domai else None)
+
+            # 4) allinea il testo scelto
+            _w, _ok = _align(testo)
+            if _w:
+                timestamps, timestamps_incomplete = _w, (not _ok)
+
+            # se avevo scelto l'online ma NON copre, e DomAI aveva sentito parole,
+            # ripiego su DomAI puro (allinea di sicuro cio' che ha sentito)
+            if (timestamps is None or timestamps_incomplete) and \
+               text_source == "lyrics" and testo_domai:
+                _w2, _ok2 = _align(testo_domai)
+                if _w2 and (_ok2 or timestamps is None):
+                    timestamps = _w2
+                    timestamps_incomplete = not _ok2
+                    testo, text_source = testo_domai, "whisper"
 
         # EXPORT mp3 IN PARALLELO (niente loudnorm: lo fa KC)
         final = d / "final"
@@ -215,9 +230,10 @@ def handler(job: dict) -> dict:
             "stems": [p.name for p in sorted(final.glob("*.mp3"))],
             "chords": False,
             "download_url": url,
-            "timestamps": timestamps,
-            "text": testo or None,                     # testo usato (fornito o Whisper)
-            "text_source": "whisper" if testo_da_whisper else ("lyrics" if testo else None),
+            "timestamps": timestamps,                  # tempi DomAI: SEMPRE (rete finale)
+            "timestamps_incomplete": bool(timestamps_incomplete),
+            "text": testo or None,                     # testo EFFETTIVAMENTE usato
+            "text_source": text_source,                # "lyrics" (online) | "whisper" (DomAI)
         }
     except subprocess.CalledProcessError as e:
         return {"error": f"Step fallito: {e}"}
