@@ -417,23 +417,13 @@ def align_words(vocals_path, text, synced_lyrics=None, ffmpeg="ffmpeg"):
 
     starts = [t[0] for t in raw]
 
-    # ONSET-SNAP: il modello LAM marca la sillaba DOPO l'attacco percettivo della
-    # nota (soprattutto su code/melisma di fine frase) -> le parole finali vanno in
-    # ritardo. Le riaggancio all'attacco di nota reale (conservativo: max 0.30s, mai
-    # oltre la parola precedente). Disattivabile con env LAM_SNAP_ONSET=0.
-    if os.environ.get("LAM_SNAP_ONSET", "1") == "1" and _note_ons is not None and len(_note_ons):
-        try:
-            starts, _mv = _snap_to_note_onsets(starts, _note_ons, max_shift=0.30)
-            _LOG(f"[DomAI] onset-snap: {_mv} attacchi riagganciati alla nota")
-        except Exception:
-            pass
-
-    # ANTI-DERAGLIAMENTO: su testi RIPETITIVI (ritornelli ossessivi con frasi
-    # identiche di fila) il viterbi di LAM puo' AMMASSARE molte sillabe in pochi
-    # decimi di secondo tra due gap enormi. Rilevo i "run collassati" (>=6 sillabe
-    # con inter-onset < 0.06s = fisicamente impossibile da cantare) e li
-    # ridistribuisco uniformemente nell'intervallo reale tra la parola buona prima
-    # e quella buona dopo. Disattivabile con env LAM_ANTIRAIL=0.
+    # ANTI-DERAGLIAMENTO (PRIMA dello snap, sui tempi grezzi di LAM): su testi
+    # RIPETITIVI (ritornelli ossessivi con frasi identiche di fila) il viterbi di LAM
+    # AMMASSA molte parole in pochi decimi tra due gap enormi. Rilevo per DENSITA':
+    # una finestra di >=6 parole la cui media inter-parola e' < 0.18s (=> >5,5
+    # parole/s, fisicamente impossibile da cantare), tollerando i gap interni misti.
+    # Ridistribuisco il run uniformemente tra la parola buona PRIMA e quella DOPO,
+    # sfruttando lo spazio del "buco" che il viterbi ha lasciato. Env LAM_ANTIRAIL=0.
     if os.environ.get("LAM_ANTIRAIL", "1") == "1" and len(starts) > 6:
         try:
             n = len(starts)
@@ -441,10 +431,11 @@ def align_words(vocals_path, text, synced_lyrics=None, ffmpeg="ffmpeg"):
             fixed_runs = 0
             while i < n:
                 j = i
-                while j + 1 < n and (starts[j + 1] - starts[j]) < 0.06:
+                # estendo finche' la media inter-parola del blocco resta "impossibile"
+                while j + 1 < n and (starts[j + 1] - starts[i]) < 0.18 * (j + 2 - i):
                     j += 1
                 run = j - i + 1
-                if run >= 6:
+                if run >= 6 and (starts[j] - starts[i]) < 0.18 * run:
                     t0 = starts[i - 1] if i > 0 else starts[i]
                     t1 = starts[j + 1] if j + 1 < n else (starts[j] + 2.0)
                     if t1 - t0 > 1.0:
@@ -452,9 +443,22 @@ def align_words(vocals_path, text, synced_lyrics=None, ffmpeg="ffmpeg"):
                         for k in range(run):
                             starts[i + k] = t0 + step * (k + 1)
                         fixed_runs += 1
-                i = j + 1
+                    i = j + 1
+                else:
+                    i += 1
             if fixed_runs:
                 _LOG(f"[DomAI] anti-deragliamento: {fixed_runs} run ripetitivi ridistribuiti")
+        except Exception:
+            pass
+
+    # ONSET-SNAP (dopo l'anti-deragliamento): il modello LAM marca la sillaba DOPO
+    # l'attacco percettivo della nota (soprattutto su code/melisma di fine frase) ->
+    # le parole finali vanno in ritardo. Le riaggancio all'attacco di nota reale
+    # (conservativo: max 0.30s, mai oltre la parola precedente). Env LAM_SNAP_ONSET=0.
+    if os.environ.get("LAM_SNAP_ONSET", "1") == "1" and _note_ons is not None and len(_note_ons):
+        try:
+            starts, _mv = _snap_to_note_onsets(starts, _note_ons, max_shift=0.30)
+            _LOG(f"[DomAI] onset-snap: {_mv} attacchi riagganciati alla nota")
         except Exception:
             pass
 
