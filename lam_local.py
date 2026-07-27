@@ -522,11 +522,20 @@ def align_words(vocals_path, text, synced_lyrics=None, ffmpeg="ffmpeg"):
     _canto_muto = 0
     if _note_ons is not None and len(_note_ons):
         for _i in range(1, len(starts)):
-            if starts[_i] - starts[_i - 1] > 4.0:
+            _gap = starts[_i] - starts[_i - 1]
+            # SOLO buchi "da frase saltata" (4-9s). Oltre = INTERLUDIO strumentale:
+            # con la separazione a 2 step i CORI/coda riempiono l'interludio di attacchi
+            # vocali che NON sono parole mancanti -> falso "canto muto" (era il bug che
+            # marcava incompleto brani con 230 parole complete, es. Marcello Pieri).
+            if 4.0 < _gap <= 9.0:
                 _in = [o for o in _note_ons if starts[_i - 1] + 0.6 < o < starts[_i] - 0.6]
-                if len(_in) >= 4:
+                # densita' da CANTATO vero (>=6 onset ravvicinati in <9s); i cori sparsi
+                # di un interludio raramente arrivano a questa densita'.
+                if len(_in) >= 6:
                     _canto_muto += 1
-        if _canto_muto:
+        # 1 solo tratto puo' essere un falso positivo -> ne servono almeno 2 per
+        # dichiarare il testo incompleto (caso reale = piu' frasi mancanti).
+        if _canto_muto >= 2:
             ok = False
             _LOG(f"[DomAI] rilevate MENO parole del cantato: {_canto_muto} tratti cantati senza testo")
     info = {"ok": ok, "score": round(score, 1), "anchored": n_anch,
