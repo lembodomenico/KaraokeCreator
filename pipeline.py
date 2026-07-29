@@ -67,11 +67,14 @@ for f in _new_a:
         pass
 
 # === STEP B: base + cori (solista rimosso) -> per il KARAOKE ===
-print("\n=== STEP B: roformer karaoke gabox_v2 -> base+cori per il karaoke ===")
+# ENSEMBLE aufr33/viperx + gabox_v2 (ripristinato: era la base "buona" originale,
+# commit 3364d84). Due modelli mediati = base piu' pulita del solo gabox_v2.
+print("\n=== STEP B: roformer karaoke ENSEMBLE (aufr33/viperx + gabox_v2) -> base+cori ===")
 _before = _wavs()
 subprocess.run([
     "audio-separator", INPUT,
-    "-m", "mel_band_roformer_karaoke_gabox_v2.ckpt",
+    "-m", "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt",
+    "--extra_models", "mel_band_roformer_karaoke_gabox_v2.ckpt",
     "--output_format", "WAV",
 ], check=True)
 _new_b = _wavs() - _before
