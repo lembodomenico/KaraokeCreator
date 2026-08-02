@@ -183,9 +183,22 @@ def handler(job: dict) -> dict:
                 testo_domai = ""
             n_domai = _wc(testo_domai)
 
-            # 2) scelta testo: online solo se COPRE (>= ~90% delle parole DomAI)
-            if testo_server and (n_domai == 0 or _wc(testo_server) >= 0.9 * n_domai):
-                testo, text_source = testo_server, "lyrics"
+            # 2) scelta testo: tra i CANDIDATI passati dal server (delimitati da
+            #    @@@CAND@@@), scelgo quello col n. parole PIU' VICINO al cantato reale
+            #    (n_domai da DomAI/Whisper) -> non un testo gonfiato ne' uno incompleto,
+            #    ma quello che COMBACIA col cantato. Lo uso solo se ragionevolmente
+            #    vicino (entro il 35% del conteggio cantato); altrimenti DomAI puro.
+            _cand_list = [c.strip() for c in testo_server.split("@@@CAND@@@")
+                          if c and c.strip()] if testo_server else []
+            _best, _bestd = None, None
+            for _c in _cand_list:
+                _d = abs(_wc(_c) - n_domai)
+                if _bestd is None or _d < _bestd:
+                    _bestd, _best = _d, _c
+            if _best is not None and (n_domai == 0 or _bestd <= 0.35 * n_domai):
+                testo, text_source = _best, "lyrics"
+                print(f"[TESTO] scelto candidato {_wc(_best)} parole (cantato ~{n_domai}, "
+                      f"scarto {_bestd}) su {len(_cand_list)} candidati", flush=True)
             else:
                 testo, text_source = testo_domai, ("whisper" if testo_domai else None)
 
