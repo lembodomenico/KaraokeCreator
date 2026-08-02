@@ -39,6 +39,9 @@ RUN pip install --no-cache-dir --force-reinstall "torch==2.8.0" "torchaudio==2.8
 RUN audio-separator --download_model_only -m UVR-MDX-NET-Inst_HQ_3.onnx || true
 RUN audio-separator --download_model_only -m mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt || true
 RUN audio-separator --download_model_only -m mel_band_roformer_karaoke_gabox_v2.ckpt || true
+# VOCE di allineamento = lead+CORI (niente buchi nei ritornelli corali): modello
+# VOCALE standard BS-Roformer (Vocals = tutte le voci). Pre-scaricato qui.
+RUN audio-separator --download_model_only -m model_bs_roformer_ep_317_sdr_12.9755.ckpt || true
 
 # --- LAM: allineamento testo sul cantato (gira sullo STESSO worker gia' caldo:
 # nessun cold start in piu'). espeak-ng NATIVO via apt (Ubuntu root) -> niente
