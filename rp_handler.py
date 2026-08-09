@@ -70,7 +70,21 @@ def _get_audio(job_dir: Path, inp: dict) -> Path:
 def _ftp_upload(local_file: Path, remote_name: str) -> str:
     ftp = ftplib.FTP(FTP_HOST, timeout=120)
     ftp.login(FTP_USER, FTP_PASS)
-    ftp.cwd(FTP_DIR)
+    # crea la cartella di destinazione se non esiste (percorso assoluto)
+    try:
+        ftp.cwd(FTP_DIR)
+    except Exception:
+        cur = ""
+        for part in [p for p in FTP_DIR.split("/") if p]:
+            cur += "/" + part
+            try:
+                ftp.cwd(cur)
+            except Exception:
+                try:
+                    ftp.mkd(cur)
+                    ftp.cwd(cur)
+                except Exception:
+                    pass
     with local_file.open("rb") as f:
         ftp.storbinary(f"STOR {remote_name}", f)
     ftp.quit()
@@ -124,6 +138,14 @@ def whisper_transcribe(vocals_path: str, lang=None) -> str:
 def handler(job: dict) -> dict:
     job_id = job.get("id", uuid.uuid4().hex[:12])
     inp = job.get("input", {}) or {}
+    # Override della destinazione FTP dall'input del job (il server passa i valori
+    # correnti: cosi' si puo' spostare lo storage senza toccare l'env dell'endpoint).
+    global FTP_HOST, FTP_USER, FTP_PASS, FTP_DIR, PUBLIC_BASE_URL
+    FTP_HOST = inp.get("ftp_host") or FTP_HOST
+    FTP_USER = inp.get("ftp_user") or FTP_USER
+    FTP_PASS = inp.get("ftp_pass") or FTP_PASS
+    FTP_DIR = inp.get("ftp_dir") or FTP_DIR
+    PUBLIC_BASE_URL = inp.get("public_base_url") or PUBLIC_BASE_URL
     d = WORK / job_id
     try:
         audio = _get_audio(d, inp)
