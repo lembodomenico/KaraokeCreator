@@ -31,11 +31,27 @@ _DL_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; KaraokeCreator/1.0)"}
 WORK = Path("/tmp/jobs")
 WORK.mkdir(parents=True, exist_ok=True)
 
-FTP_HOST = os.environ.get("FTP_HOST")
-FTP_USER = os.environ.get("FTP_USER")
+# Destinazione FTP dei risultati. Default = VPS NUOVO (karaokecreator.karadom.it).
+# Il vecchio server (185.73.8.100 / karaokedom.it / .../karaokecreator) e' DISMESSO
+# e non va MAI usato: _no_old() neutralizza ogni suo residuo che arrivasse dall'env
+# dell'endpoint. La password NON e' cablata: arriva dall'input del job (repo pubblico).
+_NEW_FTP_HOST    = "94.72.100.151"
+_NEW_FTP_USER    = "kcftp"
+_NEW_FTP_DIR     = "/risultati"
+_NEW_PUBLIC_BASE = "https://karaokecreator.karadom.it/risultati"
+
+def _no_old(val, new):
+    """Se il valore e' vuoto o punta al vecchio server dismesso, usa quello nuovo."""
+    if not val:
+        return new
+    bad = ("185.73.8.100", "karaokedom.it", "/karaokecreator", "dlembo")
+    return new if any(b in val for b in bad) else val
+
+FTP_HOST = _no_old(os.environ.get("FTP_HOST"), _NEW_FTP_HOST)
+FTP_USER = _no_old(os.environ.get("FTP_USER"), _NEW_FTP_USER)
 FTP_PASS = os.environ.get("FTP_PASS")
-FTP_DIR = os.environ.get("FTP_DIR", "/public_html/karaokecreator/risultati")
-PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://karadom.it/karaokecreator/risultati")
+FTP_DIR = _no_old(os.environ.get("FTP_DIR"), _NEW_FTP_DIR)
+PUBLIC_BASE_URL = _no_old(os.environ.get("PUBLIC_BASE_URL"), _NEW_PUBLIC_BASE)
 
 
 def _get_audio(job_dir: Path, inp: dict) -> Path:
