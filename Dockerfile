@@ -80,18 +80,11 @@ COPY pipeline.py rp_handler.py /app/
 # COPY cachata/vecchia viene SCAVALCATA a livello di libreria. In testa a rp_handler.py
 # patcho ftplib.FTP.connect/login -> VPS 94.72.100.151 utente kcftp (password dall'ENV
 # dell'endpoint FTP_PASS, cosi' NIENTE segreti nel repo). Un RUN si ricompila sempre.
-RUN { printf '%s\n' \
-  'import ftplib as _kcf, os as _kco' \
-  '_kc_oc=_kcf.FTP.connect; _kc_ol=_kcf.FTP.login' \
-  'def _kc_connect(self, *a, **k):' \
-  '    return _kc_oc(self, "94.72.100.151")' \
-  'def _kc_login(self, *a, **k):' \
-  '    return _kc_ol(self, "kcftp", _kco.environ.get("FTP_PASS") or "")' \
-  '_kcf.FTP.connect=_kc_connect; _kcf.FTP.login=_kc_login' \
-  'print("[FTP-REDIRECT] -> 94.72.100.151 kcftp", flush=True)' ; \
-  cat /app/rp_handler.py ; } > /app/rp_handler.patched \
-  && mv /app/rp_handler.patched /app/rp_handler.py \
-  && python -c "import ast; ast.parse(open('/app/rp_handler.py').read()); print('rp_handler REDIRECT ok')"
+RUN printf 'import ftplib as _kcf, os as _kco\n_kc_oc=_kcf.FTP.connect\n_kc_ol=_kcf.FTP.login\ndef _kc_connect(self,*a,**k):\n    return _kc_oc(self,"94.72.100.151")\ndef _kc_login(self,*a,**k):\n    return _kc_ol(self,"kcftp",_kco.environ.get("FTP_PASS") or "")\n_kcf.FTP.connect=_kc_connect\n_kcf.FTP.login=_kc_login\nprint("[FTP-REDIRECT] -> 94.72.100.151 kcftp",flush=True)\n' > /app/_redir.py \
+ && cat /app/_redir.py /app/rp_handler.py > /app/_rh.py \
+ && mv /app/_rh.py /app/rp_handler.py \
+ && rm -f /app/_redir.py \
+ && python -c "import ast; ast.parse(open('/app/rp_handler.py').read()); print('rp_handler REDIRECT ok')"
 # PROVA build: conferma che nell'immagine sia finito il rp_handler NUOVO (FTP->VPS +
 # log [FTP-TARGET]). Se qui non compare, la COPY e' stata cachata a un file vecchio.
 RUN grep -n "_NEW_FTP_HOST\|FTP-TARGET" /app/rp_handler.py || (echo "!!! rp_handler VECCHIO nell'immagine !!!" && exit 1)
