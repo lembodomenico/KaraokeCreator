@@ -10,7 +10,7 @@
 FROM runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404
 
 WORKDIR /app
-ARG CACHE_BUST=20260814f
+ARG CACHE_BUST=20260814g
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TORCHAUDIO_USE_BACKEND_DISPATCHER=0
 
@@ -76,5 +76,8 @@ RUN python -c "from faster_whisper import WhisperModel; WhisperModel('large-v3-t
 
 # Codice: pipeline snella + handler. NIENTE accordi.py.
 COPY pipeline.py rp_handler.py /app/
+# PROVA build: conferma che nell'immagine sia finito il rp_handler NUOVO (FTP->VPS +
+# log [FTP-TARGET]). Se qui non compare, la COPY e' stata cachata a un file vecchio.
+RUN grep -n "_NEW_FTP_HOST\|FTP-TARGET" /app/rp_handler.py || (echo "!!! rp_handler VECCHIO nell'immagine !!!" && exit 1)
 
 CMD ["python", "-u", "rp_handler.py"]

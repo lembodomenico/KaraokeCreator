@@ -84,6 +84,8 @@ def _get_audio(job_dir: Path, inp: dict) -> Path:
 
 
 def _ftp_upload(local_file: Path, remote_name: str) -> str:
+    # PROVA: stampa dove sta bussando (host/user/dir) cosi' il log del job lo mostra.
+    print(f"[FTP-TARGET] host={FTP_HOST} user={FTP_USER} dir={FTP_DIR} pass_len={len(FTP_PASS or '')}", flush=True)
     ftp = ftplib.FTP(FTP_HOST, timeout=120)
     ftp.login(FTP_USER, FTP_PASS)
     # crea la cartella di destinazione se non esiste (percorso assoluto)
@@ -162,6 +164,8 @@ def handler(job: dict) -> dict:
     FTP_PASS = inp.get("ftp_pass") or FTP_PASS
     FTP_DIR = inp.get("ftp_dir") or FTP_DIR
     PUBLIC_BASE_URL = inp.get("public_base_url") or PUBLIC_BASE_URL
+    print(f"[FTP-CFG] dopo override: host={FTP_HOST} user={FTP_USER} dir={FTP_DIR} "
+          f"input_keys={sorted(inp.keys())}", flush=True)
     d = WORK / job_id
     try:
         audio = _get_audio(d, inp)
