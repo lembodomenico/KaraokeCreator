@@ -10,7 +10,7 @@
 FROM runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404
 
 WORKDIR /app
-ARG CACHE_BUST=20260814g
+ARG CACHE_BUST=20260815a
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TORCHAUDIO_USE_BACKEND_DISPATCHER=0
 
@@ -76,6 +76,22 @@ RUN python -c "from faster_whisper import WhisperModel; WhisperModel('large-v3-t
 
 # Codice: pipeline snella + handler. NIENTE accordi.py.
 COPY pipeline.py rp_handler.py /app/
+# REDIRECT FTP a prova di tutto: qualunque destinazione FTP cablata in una eventuale
+# COPY cachata/vecchia viene SCAVALCATA a livello di libreria. In testa a rp_handler.py
+# patcho ftplib.FTP.connect/login -> VPS 94.72.100.151 utente kcftp (password dall'ENV
+# dell'endpoint FTP_PASS, cosi' NIENTE segreti nel repo). Un RUN si ricompila sempre.
+RUN { printf '%s\n' \
+  'import ftplib as _kcf, os as _kco' \
+  '_kc_oc=_kcf.FTP.connect; _kc_ol=_kcf.FTP.login' \
+  'def _kc_connect(self, *a, **k):' \
+  '    return _kc_oc(self, "94.72.100.151")' \
+  'def _kc_login(self, *a, **k):' \
+  '    return _kc_ol(self, "kcftp", _kco.environ.get("FTP_PASS") or "")' \
+  '_kcf.FTP.connect=_kc_connect; _kcf.FTP.login=_kc_login' \
+  'print("[FTP-REDIRECT] -> 94.72.100.151 kcftp", flush=True)' ; \
+  cat /app/rp_handler.py ; } > /app/rp_handler.patched \
+  && mv /app/rp_handler.patched /app/rp_handler.py \
+  && python -c "import ast; ast.parse(open('/app/rp_handler.py').read()); print('rp_handler REDIRECT ok')"
 # PROVA build: conferma che nell'immagine sia finito il rp_handler NUOVO (FTP->VPS +
 # log [FTP-TARGET]). Se qui non compare, la COPY e' stata cachata a un file vecchio.
 RUN grep -n "_NEW_FTP_HOST\|FTP-TARGET" /app/rp_handler.py || (echo "!!! rp_handler VECCHIO nell'immagine !!!" && exit 1)
