@@ -10,7 +10,7 @@
 FROM runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404
 
 WORKDIR /app
-ARG CACHE_BUST=20260814d
+ARG CACHE_BUST=20260814e
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TORCHAUDIO_USE_BACKEND_DISPATCHER=0
 
@@ -39,6 +39,28 @@ RUN pip uninstall -y onnxruntime onnxruntime-gpu || true \
 # Reinstalla torch/torchaudio FISSI in caso audio-separator li abbia toccati.
 RUN pip install --no-cache-dir --force-reinstall "torch==2.8.0" "torchaudio==2.8.0" \
         --index-url https://download.pytorch.org/whl/cu128
+
+# PEZZA librosa: audio-separator (anche l'ultima versione) chiama
+# `librosa.get_duration(filename=...)`, ma librosa >=0.10 ha RIMOSSO `filename`
+# (rinominato `path`) -> TypeError e separazione morta (exit 1 ~36s). Invece di
+# pinnare versioni (rischio cascata numpy), installo un sitecustomize.py che Python
+# auto-importa ad OGNI avvio: intercetta get_duration e traduce filename->path da
+# solo, per qualunque versione di librosa. Chirurgico, non tocca il resto.
+RUN SP=$(python -c "import os,audio_separator; print(os.path.dirname(os.path.dirname(audio_separator.__file__)))") && \
+    printf '%s\n' \
+    'try:' \
+    '    import librosa, inspect' \
+    '    if "filename" not in inspect.signature(librosa.get_duration).parameters:' \
+    '        _o = librosa.get_duration' \
+    '        def _gd(*a, **k):' \
+    '            if "filename" in k and "path" not in k:' \
+    '                k["path"] = k.pop("filename")' \
+    '            return _o(*a, **k)' \
+    '        librosa.get_duration = _gd' \
+    'except Exception:' \
+    '    pass' \
+    > "$SP/sitecustomize.py" && \
+    echo "sitecustomize.py -> $SP" && cat "$SP/sitecustomize.py"
 
 # Pre-download dei modelli NELL'IMMAGINE (no download a runtime).
 # STEP A (voce completa lead+cori per la trascrizione): UVR-MDX-NET-Inst_HQ_3.

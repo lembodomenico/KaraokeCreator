@@ -166,9 +166,19 @@ def handler(job: dict) -> dict:
     try:
         audio = _get_audio(d, inp)
 
-        # SEPARAZIONE (solo Roformer voce+strumenti, una passata)
-        subprocess.run(["python", "/app/pipeline.py", str(audio)],
-                       cwd=str(d), check=True)
+        # SEPARAZIONE (solo Roformer voce+strumenti, una passata).
+        # Cattura stdout+stderr: se pipeline.py fallisce, l'errore VERO (traceback)
+        # torna nel messaggio d'errore del job invece di restare nascosto nei log RunPod.
+        _p = subprocess.run(["python", "/app/pipeline.py", str(audio)],
+                            cwd=str(d), capture_output=True, text=True)
+        # Ristampa comunque l'output nei log del worker (per lo storico su RunPod).
+        if _p.stdout:
+            print(_p.stdout)
+        if _p.stderr:
+            print(_p.stderr)
+        if _p.returncode != 0:
+            _tail = (_p.stderr or _p.stdout or "").strip().splitlines()[-12:]
+            return {"error": "Separazione fallita (pipeline.py):\n" + "\n".join(_tail)}
         stems_dir = next(d.glob("stems_*"))
 
         # === DomAI: trascrizione + allineamento del cantato ===
