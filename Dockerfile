@@ -10,7 +10,7 @@
 FROM runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404
 
 WORKDIR /app
-ARG CACHE_BUST=20260814c
+ARG CACHE_BUST=20260814d
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TORCHAUDIO_USE_BACKEND_DISPATCHER=0
 
@@ -29,7 +29,10 @@ RUN pip install --no-cache-dir "torch==2.8.0" "torchaudio==2.8.0" \
 # --ignore-installed cryptography: nell'immagine base cryptography e' installata da
 # Debian (apt) SENZA file RECORD -> pip non riesce a disinstallarla e la build muore
 # (uninstall-no-record-file). Cosi' pip installa la sua versione senza toccare quella di sistema.
-RUN pip install --no-cache-dir --ignore-installed cryptography "audio-separator[gpu]" runpod requests boto3
+# audioread: audio-separator riceve input .mp3; soundfile NON legge mp3 -> librosa
+# ripiega su audioread (backend ffmpeg, gia' installato). Senza -> ModuleNotFoundError
+# 'audioread' e la separazione muore subito (exit 1 in ~20s). Va installato esplicitamente.
+RUN pip install --no-cache-dir --ignore-installed cryptography "audio-separator[gpu]" audioread runpod requests boto3
 # Forza onnxruntime-gpu compatibile CUDA 12.x (1.19.2 supporta cu12).
 RUN pip uninstall -y onnxruntime onnxruntime-gpu || true \
     && pip install --no-cache-dir onnxruntime-gpu==1.19.2
