@@ -1,26 +1,29 @@
 #!/usr/bin/env python3
 """
-pipeline.py — Pipeline KARAOKECREATOR: voce d'allineamento = LEAD PULITO (2 stadi).
+pipeline.py — Pipeline KARAOKECREATOR: UNA SOLA separazione (karaoke ensemble).
 
-SCOPERTA (2026-08-19): il modello KARAOKE applicato al MIX lascia i cori nel suo
-(Vocals) -> voce ancora sporca. Come fa mvsep ("Karaoke lead/back" = "Extract vocals
-first"), il lead pulito si ottiene a DUE STADI: prima si estrae TUTTO il cantato
-(modello vocale), poi si applica il karaoke SUL CANTATO -> lì il karaoke separa
-davvero lead da cori. Il PRODOTTO (base+cori) resta la karaoke-ensemble sul mix,
-INVARIATO: cambio solo la VOCE d'allineamento.
+STORIA / SCELTA (2026-08-19, ordine esplicito utente "TOGLI I CORI DALLA VOCE"):
+prima si facevano DUE separazioni -> la seconda (modello vocale standard) rimetteva
+i CORI dentro la voce d'allineamento (lead+cori), per non lasciare stem muti dove
+cantano solo i cori. MA nel finale corale il LAM ci ammassava le parole ("uh uh") ->
+grumo, base inusabile. Ora si TORNA a una voce LEAD PULITA per allineare.
 
-  A) KARAOKE ENSEMBLE sul MIX (aufr33/viperx + gabox_v2):
-       (Instrumental) = BASE + CORI -> base_piu_cori.wav   (prodotto, invariato)
-  B) modello VOCALE (BS-Roformer) sul MIX:
-       (Vocals) = TUTTO il cantato (lead+cori) -> _full_vocals.wav (temporaneo)
-  C) KARAOKE (aufr33/viperx) sul CANTATO _full_vocals.wav:
-       (Vocals) = LEAD PULITO (cori tolti) -> lead_riferimento.wav (allineamento)
+Come, in UNA SOLA passata: la separazione KARAOKE ENSEMBLE produce GIA' i due stem
+che servono. Prima si teneva solo (Instrumental) e si BUTTAVA (Vocals): ora si tiene
+anche (Vocals), che e' il lead pulito, e si ELIMINA la seconda separazione.
 
-Nomi stem finali INVARIATI (lead_riferimento.wav -> original_vocals.mp3,
-base_piu_cori.wav -> original_instrumental.mp3): il server KC non cambia nulla.
+  Roformer KARAOKE ENSEMBLE (aufr33/viperx + gabox_v2), una separazione:
+    (Instrumental) = BASE + CORI  -> base_piu_cori.wav   (il karaoke che ascolta l'utente:
+                                     cori DENTRO, qualita' ensemble eccellente)
+    (Vocals)       = LEAD pulito  -> lead_riferimento.wav (trascrizione DomAI + LAM si
+                                     allineano su questo: CORI FUORI dalla voce)
 
-Costo: 3 separazioni (piu' lento del singolo), ma e' l'unico modo per una voce
-davvero lead-pulita. Modelli tutti gia' pre-scaricati nell'immagine.
+NB: il NOME degli stem resta invariato (`lead_riferimento.wav` -> original_vocals.mp3,
+`base_piu_cori.wav` -> original_instrumental.mp3) cosi' il server KC non cambia nulla nel
+mapping: cambia solo il CONTENUTO della voce (ora lead pulito, non piu' lead+cori).
+
+Trade-off noto: dove cantano SOLO i cori la voce lead e' muta -> per quello si toglie il
+testo dei cori ("uh uh") in editing e c'e' AUTOSEG. Reversibile: git revert.
 
 Uso:
   python pipeline.py "Ligabue - Almeno credo.flac"
@@ -28,7 +31,6 @@ Uso:
 import subprocess
 import sys
 import shutil
-import os
 from pathlib import Path
 
 if len(sys.argv) < 2:
@@ -44,28 +46,18 @@ stem_name = Path(INPUT).stem
 OUTDIR = Path(f"stems_{stem_name}")
 OUTDIR.mkdir(exist_ok=True)
 
-KARAOKE_MAIN = "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt"
-KARAOKE_XTRA = "mel_band_roformer_karaoke_gabox_v2.ckpt"
-VOICE_MODEL = os.environ.get("VOICE_MODEL", "model_bs_roformer_ep_317_sdr_12.9755.ckpt")
-
 
 def _wavs():
     return set(Path(".").glob("*.wav"))
 
 
-def _find(new_files, needle):
+def _take(new_files, needle, dst_name, descr):
+    """Copia in OUTDIR il primo wav di `new_files` il cui nome contiene `needle`."""
     for f in sorted(new_files):
         if needle in f.name:
-            return f
-    return None
-
-
-def _take(new_files, needle, dst_name, descr):
-    f = _find(new_files, needle)
-    if f:
-        shutil.copy(f, OUTDIR / dst_name)
-        print(f"  -> {dst_name} ({descr})")
-        return True
+            shutil.copy(f, OUTDIR / dst_name)
+            print(f"  -> {dst_name} ({descr})")
+            return True
     return False
 
 
@@ -77,44 +69,22 @@ def _cleanup(new_files):
             pass
 
 
-def _sep(args, descr):
-    print(f"\n=== {descr} ===")
-    subprocess.run(["audio-separator", *args, "--output_format", "WAV"], check=True)
-
-
-# === A) KARAOKE ENSEMBLE sul MIX -> base+cori (PRODOTTO, invariato) ===
+# === KARAOKE ENSEMBLE, UNA SOLA separazione: da qui prendo SIA la base+cori
+#     (prodotto) SIA il lead PULITO (allineamento). ===
+print("\n=== Roformer KARAOKE ensemble (aufr33/viperx + gabox_v2) -> base+cori E lead pulito ===")
 _before = _wavs()
-_sep([INPUT, "-m", KARAOKE_MAIN, "--extra_models", KARAOKE_XTRA],
-     "[A] KARAOKE ensemble sul mix -> base+cori")
+subprocess.run([
+    "audio-separator", INPUT,
+    "-m", "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt",
+    "--extra_models", "mel_band_roformer_karaoke_gabox_v2.ckpt",
+    "--output_format", "WAV",
+], check=True)
 _new = _wavs() - _before
+# (Instrumental) = base+cori -> il karaoke (cori DENTRO, qualita' ensemble)
 _take(_new, "(Instrumental)", "base_piu_cori.wav", "base+cori, per il karaoke")
+# (Vocals) = LEAD pulito -> voce d'allineamento (cori FUORI). Prima veniva buttato.
+_take(_new, "(Vocals)", "lead_riferimento.wav", "LEAD pulito (cori tolti), per trascrizione/allineamento")
 _cleanup(_new)
-
-# === B) VOCALE sul MIX -> TUTTO il cantato (lead+cori), temporaneo ===
-_before = _wavs()
-_sep([INPUT, "-m", VOICE_MODEL], f"[B] vocale ({VOICE_MODEL}) sul mix -> cantato completo")
-_new = _wavs() - _before
-_full = OUTDIR / "_full_vocals.wav"
-_vf = _find(_new, "(Vocals)")
-if _vf:
-    shutil.copy(_vf, _full)
-    print("  -> _full_vocals.wav (lead+cori, temporaneo)")
-_cleanup(_new)
-
-# === C) KARAOKE sul CANTATO -> LEAD PULITO (cori tolti) ===
-if _full.exists():
-    _before = _wavs()
-    _sep([str(_full), "-m", KARAOKE_MAIN],
-         "[C] KARAOKE sul cantato -> LEAD pulito (cori tolti)")
-    _new = _wavs() - _before
-    _take(_new, "(Vocals)", "lead_riferimento.wav", "LEAD pulito (2-stage), per allineamento")
-    _cleanup(_new)
-    try:
-        _full.unlink()
-    except Exception:
-        pass
-else:
-    print("ATTENZIONE: cantato completo non prodotto dallo stadio B -> niente lead pulito")
 
 if not (OUTDIR / "lead_riferimento.wav").exists() or not (OUTDIR / "base_piu_cori.wav").exists():
     print(f"ATTENZIONE: stem mancanti in {OUTDIR}: "
