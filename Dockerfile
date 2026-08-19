@@ -74,14 +74,14 @@ COPY lam/ /app/lam/
 RUN pip install --no-cache-dir faster-whisper
 RUN python -c "from faster_whisper import WhisperModel; WhisperModel('large-v3-turbo', device='cpu', compute_type='int8')" || true
 
-# Codice: pipeline snella + handler. NIENTE accordi.py.
-COPY pipeline.py rp_handler.py /app/
+# Codice: pipeline snella + handler + loader hotpatch. NIENTE accordi.py.
+COPY pipeline.py rp_handler.py _hotpatch.py /app/
 # REDIRECT FTP a prova di tutto: qualunque destinazione FTP cablata in una eventuale
 # COPY cachata/vecchia viene SCAVALCATA a livello di libreria. In testa a rp_handler.py
 # patcho ftplib.FTP.connect/login -> VPS 94.72.100.151 utente kcftp (password dall'ENV
 # dell'endpoint FTP_PASS, cosi' NIENTE segreti nel repo). Un RUN si ricompila sempre.
 RUN printf 'import ftplib as _kcf, os as _kco\n_kc_oc=_kcf.FTP.connect\n_kc_ol=_kcf.FTP.login\ndef _kc_connect(self,*a,**k):\n    return _kc_oc(self,"94.72.100.151")\ndef _kc_login(self,*a,**k):\n    return _kc_ol(self,"kcftp",_kco.environ.get("FTP_PASS") or "")\n_kcf.FTP.connect=_kc_connect\n_kcf.FTP.login=_kc_login\nprint("[FTP-REDIRECT] -> 94.72.100.151 kcftp",flush=True)\n' > /app/_redir.py \
- && cat /app/_redir.py /app/rp_handler.py > /app/_rh.py \
+ && cat /app/_redir.py /app/_hotpatch.py /app/rp_handler.py > /app/_rh.py \
  && mv /app/_rh.py /app/rp_handler.py \
  && rm -f /app/_redir.py \
  && python -c "import ast; ast.parse(open('/app/rp_handler.py').read()); print('rp_handler REDIRECT ok')"
