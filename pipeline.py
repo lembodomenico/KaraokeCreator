@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
 """
-pipeline.py — Pipeline KARAOKECREATOR: DUE separazioni con scopi diversi.
+pipeline.py — KARAOKECREATOR: 2 STADI. Karaoke CON coretto, voce d'allineamento PULITA.
 
-PERCHE' DUE (richiesta utente 2026-08-01 "UNISCI I CORI CON LA VOCE"):
-la voce per l'ALLINEAMENTO deve contenere TUTTO il cantato (lead + CORI), altrimenti
-dove cantano solo i cori lo stem e' MUTO -> il LAM/Whisper non ha voce da agganciare
--> l'allineamento DERAGLIA (verificato su Angelina Mango: buco a 10-13s = cori, poi
-deraglia). Il modello "karaoke" mette il lead in (Vocals) e i cori nella base, quindi
-NON va bene per allineare. Serve un modello VOCALE STANDARD: (Vocals) = lead + cori.
+PROBLEMA (2026-08-20): su auto-sovraincisione (il "coretto" del finale = la STESSA voce
+del solista, es. Cremonini) il modello karaoke sul mix scambia il coretto per lead e lo
+TOGLIE dalla base -> il karaoke resta senza coretto. Servono i cori NELLA base e la voce
+PULITA per allineare. Si fa a 2 stadi (come mvsep "extract vocals first"):
 
-  1) Roformer KARAOKE ENSEMBLE (aufr33/viperx + gabox_v2)  -> per il PRODOTTO
-       (Instrumental) = BASE + CORI  -> base_piu_cori.wav   (il karaoke che ascolta l'utente)
-     [il suo (Vocals)=lead pulito NON serve: si scarta]
+  STADIO 1 - VOCALE (BS-Roformer) sul MIX:
+     (Vocals)       = TUTTO il cantato (lead+coretto) -> _full_vocals.wav (temp)
+     (Instrumental) = BASE PURA (nessuna voce)        -> _base_pura.wav   (temp)
+  STADIO 2 - KARAOKE (aufr33/viperx) sul CANTATO _full_vocals.wav:
+     (Vocals)       = LEAD pulito  -> lead_riferimento.wav (allineamento, cori FUORI)
+     (Instrumental) = CORETTO      -> _coretto.wav (temp)
+  REMIX (ffmpeg, somma senza normalizzazione = niente sottrazioni instabili):
+     base_piu_cori.wav = _base_pura.wav + _coretto.wav  (karaoke CON coretto)
 
-  2) Roformer VOCALE STANDARD (BS-Roformer 1297)           -> per l'ALLINEAMENTO
-       (Vocals) = LEAD + CORI (tutto il cantato, NESSUN buco) -> lead_riferimento.wav
-       (trascrizione DomAI + LAM si allineano su questo)
-     [il suo (Instrumental)=base pura si scarta: la base del prodotto e' quella karaoke]
+Nomi stem finali INVARIATI (lead_riferimento.wav -> original_vocals.mp3,
+base_piu_cori.wav -> original_instrumental.mp3): il server KC non cambia nulla.
 
-NB: il NOME dello stem voce resta `lead_riferimento.wav` (come prima) cosi' il server
-KC non cambia nulla nel mapping (-> original_vocals.mp3): cambia solo il CONTENUTO, ora
-voce+cori. La BASE del prodotto (base_piu_cori) e' INVARIATA (stesso karaoke ensemble).
+Costo: 2 separazioni + 1 remix. Modelli gia' pre-scaricati nell'immagine.
+Reversibile: rimettere la pipeline precedente via hotpatch.
 
 Uso:
   python pipeline.py "Ligabue - Almeno credo.flac"
@@ -28,6 +28,7 @@ Uso:
 import subprocess
 import sys
 import shutil
+import os
 from pathlib import Path
 
 if len(sys.argv) < 2:
@@ -43,25 +44,28 @@ stem_name = Path(INPUT).stem
 OUTDIR = Path(f"stems_{stem_name}")
 OUTDIR.mkdir(exist_ok=True)
 
-# Modello vocale standard per la voce di allineamento (lead+cori). Sovrascrivibile
-# via env se serve cambiarlo senza toccare il codice.
-import os
-VOICE_MODEL = os.environ.get(
-    "VOICE_MODEL", "model_bs_roformer_ep_317_sdr_12.9755.ckpt"
-)
+VOICE_MODEL = os.environ.get("VOICE_MODEL", "model_bs_roformer_ep_317_sdr_12.9755.ckpt")
+KARAOKE_MODEL = os.environ.get("KARAOKE_MODEL", "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt")
 
 
 def _wavs():
     return set(Path(".").glob("*.wav"))
 
 
-def _take(new_files, needle, dst_name, descr):
-    """Copia in OUTDIR il primo wav di `new_files` il cui nome contiene `needle`."""
+def _find(new_files, needle):
     for f in sorted(new_files):
         if needle in f.name:
-            shutil.copy(f, OUTDIR / dst_name)
-            print(f"  -> {dst_name} ({descr})")
-            return True
+            return f
+    return None
+
+
+def _grab(new_files, needle, dst, descr):
+    f = _find(new_files, needle)
+    if f:
+        shutil.copy(f, dst)
+        print(f"  -> {dst.name} ({descr})")
+        return True
+    print(f"  !! stem '{needle}' non trovato per {dst.name}")
     return False
 
 
@@ -73,35 +77,58 @@ def _cleanup(new_files):
             pass
 
 
-# === 1) KARAOKE ENSEMBLE -> base+cori (PRODOTTO), invariato ===
-print("\n=== [1/2] Roformer KARAOKE ensemble -> base+cori (Instrumental) ===")
+def _sep(args, descr):
+    print(f"\n=== {descr} ===")
+    subprocess.run(["audio-separator", *args, "--output_format", "WAV"], check=True)
+
+
+_full = OUTDIR / "_full_vocals.wav"
+_base = OUTDIR / "_base_pura.wav"
+_coro = OUTDIR / "_coretto.wav"
+
+# === STADIO 1: VOCALE sul MIX -> cantato completo + base pura ===
 _before = _wavs()
-subprocess.run([
-    "audio-separator", INPUT,
-    "-m", "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt",
-    "--extra_models", "mel_band_roformer_karaoke_gabox_v2.ckpt",
-    "--output_format", "WAV",
-], check=True)
+_sep([INPUT, "-m", VOICE_MODEL], f"[1/2] VOCALE ({VOICE_MODEL}) sul mix -> cantato + base pura")
 _new = _wavs() - _before
-_take(_new, "(Instrumental)", "base_piu_cori.wav", "base+cori, per il karaoke")
+_grab(_new, "(Vocals)", _full, "cantato completo (lead+coretto), temp")
+_grab(_new, "(Instrumental)", _base, "BASE PURA (nessuna voce), temp")
 _cleanup(_new)
 
-# === 2) VOCALE STANDARD -> lead+cori (ALLINEAMENTO), niente buchi ===
-print(f"\n=== [2/2] Roformer VOCALE standard ({VOICE_MODEL}) -> voce+cori (Vocals) ===")
-_before = _wavs()
-subprocess.run([
-    "audio-separator", INPUT,
-    "-m", VOICE_MODEL,
-    "--output_format", "WAV",
-], check=True)
-_new = _wavs() - _before
-# NOME invariato (lead_riferimento.wav) ma contenuto = lead+cori
-_take(_new, "(Vocals)", "lead_riferimento.wav", "LEAD+CORI, per trascrizione/allineamento")
-_cleanup(_new)
+# === STADIO 2: KARAOKE sul CANTATO -> lead pulito + coretto ===
+if _full.exists():
+    _before = _wavs()
+    _sep([str(_full), "-m", KARAOKE_MODEL], "[2/2] KARAOKE sul cantato -> lead pulito + coretto")
+    _new = _wavs() - _before
+    _grab(_new, "(Vocals)", OUTDIR / "lead_riferimento.wav", "LEAD pulito, per allineamento")
+    _grab(_new, "(Instrumental)", _coro, "CORETTO isolato, temp")
+    _cleanup(_new)
+else:
+    print("ATTENZIONE: cantato completo mancante -> niente stadio 2")
 
-if not (OUTDIR / "lead_riferimento.wav").exists() or not (OUTDIR / "base_piu_cori.wav").exists():
-    print(f"ATTENZIONE: stem mancanti in {OUTDIR}: "
-          f"{[p.name for p in OUTDIR.iterdir()]}")
+# === REMIX: base_piu_cori = base pura + coretto (somma, no normalize) ===
+_out_base = OUTDIR / "base_piu_cori.wav"
+if _base.exists() and _coro.exists():
+    print("\n=== REMIX: base pura + coretto -> base_piu_cori.wav ===")
+    subprocess.run([
+        "ffmpeg", "-y", "-i", str(_base), "-i", str(_coro),
+        "-filter_complex", "amix=inputs=2:duration=longest:normalize=0",
+        str(_out_base),
+    ], check=True)
+    print("  -> base_piu_cori.wav (base + coretto)")
+elif _base.exists():
+    # fallback: se il coretto non c'e', almeno la base pura
+    shutil.copy(_base, _out_base)
+    print("  -> base_piu_cori.wav (solo base pura: coretto assente)")
+
+# pulizia temporanei
+for _t in (_full, _base, _coro):
+    try:
+        _t.unlink()
+    except Exception:
+        pass
+
+if not (OUTDIR / "lead_riferimento.wav").exists() or not _out_base.exists():
+    print(f"ATTENZIONE: stem mancanti in {OUTDIR}: {[p.name for p in OUTDIR.iterdir()]}")
 
 print(f"\nFATTO. Stem in: {OUTDIR.resolve()}")
 for f in sorted(OUTDIR.iterdir()):
