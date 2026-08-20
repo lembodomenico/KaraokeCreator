@@ -18,8 +18,11 @@ ENV TORCHAUDIO_USE_BACKEND_DISPATCHER=0
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# torch/torchaudio FISSI (come nell'immagine validata)
-RUN pip install --no-cache-dir "torch==2.8.0" "torchaudio==2.8.0" \
+# torch/torchvision/torchaudio FISSI e ALLINEATI (set coerente cu128).
+# torchvision 0.23.0 sposa torch 2.8.0: SENZA di essa i modelli MDX-Net (onnx2torch
+# -> torchvision) non caricano ("RuntimeError: operator torchvision::nms does not
+# exist") e la separazione Inst-sulla-voce degrada. I Roformer non la usano.
+RUN pip install --no-cache-dir "torch==2.8.0" "torchvision==0.23.0" "torchaudio==2.8.0" \
         --index-url https://download.pytorch.org/whl/cu128
 
 # SOLO audio-separator (NIENTE demucs). + runtime RunPod.
@@ -36,8 +39,8 @@ RUN pip install --no-cache-dir --ignore-installed cryptography "audio-separator[
 # Forza onnxruntime-gpu compatibile CUDA 12.x (1.19.2 supporta cu12).
 RUN pip uninstall -y onnxruntime onnxruntime-gpu || true \
     && pip install --no-cache-dir onnxruntime-gpu==1.19.2
-# Reinstalla torch/torchaudio FISSI in caso audio-separator li abbia toccati.
-RUN pip install --no-cache-dir --force-reinstall "torch==2.8.0" "torchaudio==2.8.0" \
+# Reinstalla torch/torchvision/torchaudio FISSI in caso audio-separator li abbia toccati.
+RUN pip install --no-cache-dir --force-reinstall "torch==2.8.0" "torchvision==0.23.0" "torchaudio==2.8.0" \
         --index-url https://download.pytorch.org/whl/cu128
 
 # PEZZA librosa (DEFINITIVA): audio-separator chiama `librosa.get_duration(filename=...)`,
