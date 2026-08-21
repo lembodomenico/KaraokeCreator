@@ -1,33 +1,32 @@
 #!/usr/bin/env python3
 """
-pipeline.py — Pipeline KARAOKECREATOR: DUE separazioni con scopi diversi.
+pipeline.py — Pipeline KARAOKECREATOR: UNA separazione, DUE stem con scopi diversi.
 
-PERCHE' DUE (richiesta utente 2026-08-01 "UNISCI I CORI CON LA VOCE"):
-la voce per l'ALLINEAMENTO deve contenere TUTTO il cantato (lead + CORI), altrimenti
-dove cantano solo i cori lo stem e' MUTO -> il LAM/Whisper non ha voce da agganciare
--> l'allineamento DERAGLIA (verificato su Angelina Mango: buco a 10-13s = cori, poi
-deraglia). Il modello "karaoke" mette il lead in (Vocals) e i cori nella base, quindi
-NON va bene per allineare. Serve un modello VOCALE STANDARD: (Vocals) = lead + cori.
+Architettura (richiesta utente 2026-08-21):
+  - VOCE PULITA (solo lead)   -> ALLINEAMENTO (trascrizione DomAI + LAM)
+  - STRUMENTI + CORI (no lead) -> KARAOKE (la base che ascolta l'utente)
+  - i due insieme (base+cori+lead) -> VOCE GUIDA (la monta il server KC dai 2 stem)
 
-  1) Roformer KARAOKE ENSEMBLE (aufr33/viperx + gabox_v2)  -> per il PRODOTTO
-       (Instrumental) = BASE + CORI  -> base_piu_cori.wav   (il karaoke che ascolta l'utente)
-     [il suo (Vocals)=lead pulito NON serve: si scarta]
+Il modello Roformer KARAOKE ENSEMBLE (aufr33/viperx + gabox_v2) produce ENTRAMBI
+gli stem in UNA passata:
+  (Vocals)       = LEAD PULITO   -> lead_riferimento.wav  (per allineamento)
+  (Instrumental) = BASE + CORI   -> base_piu_cori.wav      (per il karaoke)
 
-  2) Roformer VOCALE STANDARD (BS-Roformer 1297)           -> per l'ALLINEAMENTO
-       (Vocals) = LEAD + CORI (tutto il cantato, NESSUN buco) -> lead_riferimento.wav
-       (trascrizione DomAI + LAM si allineano su questo)
-     [il suo (Instrumental)=base pura si scarta: la base del prodotto e' quella karaoke]
+NB sul finale "coretto": dove Cremonini si sovraincide (stesso timbro), quel canto
+resta col lead (in Vocals). E' un limite fisico dell'audio, non della pipeline.
 
-NB: il NOME dello stem voce resta `lead_riferimento.wav` (come prima) cosi' il server
-KC non cambia nulla nel mapping (-> original_vocals.mp3): cambia solo il CONTENUTO, ora
-voce+cori. La BASE del prodotto (base_piu_cori) e' INVARIATA (stesso karaoke ensemble).
+NB nomi stem INVARIATI (lead_riferimento.wav / base_piu_cori.wav) cosi' il server KC
+non cambia il mapping (-> original_vocals.mp3 / original_instrumental.mp3).
+
+Modelli sovrascrivibili via env (KARAOKE_MODEL / KARAOKE_EXTRA) senza toccare il codice.
 
 Uso:
-  python pipeline.py "Ligabue - Almeno credo.flac"
+  python pipeline.py "CESARE CREMONINI - ORA CHE NON HO PIU TE.flac"
 """
 import subprocess
 import sys
 import shutil
+import os
 from pathlib import Path
 
 if len(sys.argv) < 2:
@@ -43,12 +42,9 @@ stem_name = Path(INPUT).stem
 OUTDIR = Path(f"stems_{stem_name}")
 OUTDIR.mkdir(exist_ok=True)
 
-# Modello vocale standard per la voce di allineamento (lead+cori). Sovrascrivibile
-# via env se serve cambiarlo senza toccare il codice.
-import os
-VOICE_MODEL = os.environ.get(
-    "VOICE_MODEL", "model_bs_roformer_ep_317_sdr_12.9755.ckpt"
-)
+# Roformer KARAOKE ensemble: (Vocals)=lead pulito, (Instrumental)=base+cori.
+KARAOKE_MODEL = os.environ.get("KARAOKE_MODEL", "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt")
+KARAOKE_EXTRA = os.environ.get("KARAOKE_EXTRA", "mel_band_roformer_karaoke_gabox_v2.ckpt")
 
 
 def _wavs():
@@ -62,6 +58,7 @@ def _take(new_files, needle, dst_name, descr):
             shutil.copy(f, OUTDIR / dst_name)
             print(f"  -> {dst_name} ({descr})")
             return True
+    print(f"  !! stem '{needle}' non trovato per {dst_name}")
     return False
 
 
@@ -73,30 +70,20 @@ def _cleanup(new_files):
             pass
 
 
-# === 1) KARAOKE ENSEMBLE -> base+cori (PRODOTTO), invariato ===
-print("\n=== [1/2] Roformer KARAOKE ensemble -> base+cori (Instrumental) ===")
+# === UNA separazione: KARAOKE ensemble -> lead pulito + base+cori ===
+print(f"\n=== Roformer KARAOKE ensemble ({KARAOKE_MODEL} + {KARAOKE_EXTRA}) ===")
 _before = _wavs()
-subprocess.run([
-    "audio-separator", INPUT,
-    "-m", "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt",
-    "--extra_models", "mel_band_roformer_karaoke_gabox_v2.ckpt",
-    "--output_format", "WAV",
-], check=True)
+args = ["audio-separator", INPUT, "-m", KARAOKE_MODEL]
+if KARAOKE_EXTRA:
+    args += ["--extra_models", KARAOKE_EXTRA]
+args += ["--output_format", "WAV"]
+subprocess.run(args, check=True)
 _new = _wavs() - _before
-_take(_new, "(Instrumental)", "base_piu_cori.wav", "base+cori, per il karaoke")
-_cleanup(_new)
 
-# === 2) VOCALE STANDARD -> lead+cori (ALLINEAMENTO), niente buchi ===
-print(f"\n=== [2/2] Roformer VOCALE standard ({VOICE_MODEL}) -> voce+cori (Vocals) ===")
-_before = _wavs()
-subprocess.run([
-    "audio-separator", INPUT,
-    "-m", VOICE_MODEL,
-    "--output_format", "WAV",
-], check=True)
-_new = _wavs() - _before
-# NOME invariato (lead_riferimento.wav) ma contenuto = lead+cori
-_take(_new, "(Vocals)", "lead_riferimento.wav", "LEAD+CORI, per trascrizione/allineamento")
+# (Vocals) = LEAD PULITO -> allineamento
+_take(_new, "(Vocals)", "lead_riferimento.wav", "LEAD PULITO, per allineamento")
+# (Instrumental) = BASE + CORI -> karaoke
+_take(_new, "(Instrumental)", "base_piu_cori.wav", "BASE + CORI, per il karaoke")
 _cleanup(_new)
 
 if not (OUTDIR / "lead_riferimento.wav").exists() or not (OUTDIR / "base_piu_cori.wav").exists():
