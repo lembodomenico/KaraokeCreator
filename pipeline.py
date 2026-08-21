@@ -1,33 +1,27 @@
 #!/usr/bin/env python3
 """
-pipeline.py — KARAOKECREATOR: base PIENA (con cori, niente buchi) + voce PULITA,
-in automatico (nessun intervento manuale per brano).
+pipeline.py — KARAOKECREATOR: metodo mvsep per lead/cori (due Roformer in cascata).
 
-PROBLEMA risolto: col BS-Roformer la base restava "depressa" dove c'e' la voce
-(buchi spettrali della rimozione-voce totale). Col modello KARAOKE la base resta
-piena. Il coretto (anche self-overdub, stessa voce) si isola con UVR-MDX-NET Inst
-girato SULLA VOCE (split armonico, metodo verificato dall'utente in UVR) e si
-RIMETTE nella base. Una 2a passata Inst sul lead pulisce il residuo di coretto
-dalla voce d'allineamento.
+Ricerca (mvsep "Lead/Back Vocals" leaderboard + audio-separator docs): i MIGLIORI
+per separare i cori NON sono gli MDX-Net (Inst_1/HQ_3, modelli STRUMENTALI generici
+che sul self-overdub non spaccano) ma i ROFORMER addestrati apposta per lead/back
+(Mel-RoFormer Karaoke/Duet SDR 7.1). Workflow mvsep: BS-Roformer estrae le voci,
+poi MelBand Roformer Karaoke (gabox V2) isola lead dai cori. I Roformer girano
+NATIVI nel worker (niente torchvision/onnx2torch -> niente 'torchvision::nms').
 
 STADI:
   1) KARAOKE ensemble (aufr33/viperx + gabox_v2) sul MIX:
-       (Instrumental) = BASE PIENA (niente buchi)       -> _base.wav   (temp)
-       (Vocals)       = VOCE completa (lead + coretto)   -> _full.wav   (temp)
-  2) Inst sulla VOCE (_full):
-       (Vocals)       = lead 1a passata                  -> _lead1.wav  (temp)
-       (Instrumental) = CORETTO isolato                  -> _coro.wav   (temp)
-     Su brani con cori "veri" (cantanti diversi) il karaoke li ha gia' messi in
-     _base e la VOCE e' solo-lead -> qui _coro esce ~vuoto e non si aggiunge nulla
-     (auto-bilanciato). Su self-overdub il coretto era rimasto nella VOCE -> qui
-     si estrae e si rimette nella base.
-  3) Inst sul lead (_lead1), 2a passata -> LEAD PULITO -> lead_riferimento.wav
+       (Instrumental) = BASE PIENA (niente buchi)  -> _base.wav   (temp)
+  2) BS-Roformer sul MIX:
+       (Vocals)       = VOCI complete (lead+coretto, con corpo) -> _fullvox.wav (temp)
+  3) KARAOKE Roformer (gabox V2) su _fullvox  [metodo mvsep lead/back]:
+       (Vocals)       = LEAD               -> lead_riferimento.wav (allineamento)
+       (Instrumental) = CORETTO (backing)  -> _coretto.wav (va nella base)
   REMIX (ffmpeg, somma no-normalize):
-       base_piu_cori.wav = _base.wav + _coro.wav
+       base_piu_cori.wav = _base.wav + _coretto.wav
 
-Nomi stem finali INVARIATI (lead_riferimento.wav -> original_vocals.mp3,
-base_piu_cori.wav -> original_instrumental.mp3). Modelli sovrascrivibili via env.
-Reversibile via hotpatch.
+Auto-bilanciato: se _coretto e' ~silenzioso (nessun coro / gia' nella base) non
+aggiunge nulla. Nomi stem finali INVARIATI. Modelli via env. Reversibile via hotpatch.
 
 Uso: python pipeline.py "brano.flac"
 """
@@ -50,13 +44,13 @@ stem_name = Path(INPUT).stem
 OUTDIR = Path(f"stems_{stem_name}")
 OUTDIR.mkdir(exist_ok=True)
 
-# STADIO 1: modello KARAOKE (base piena, cori nella base per i cori "veri").
+# STADIO 1: base piena (ensemble karaoke).
 KARAOKE_MODEL = os.environ.get("KARAOKE_MODEL", "mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt")
 KARAOKE_EXTRA = os.environ.get("KARAOKE_EXTRA", "mel_band_roformer_karaoke_gabox_v2.ckpt")
-# STADIO 2/3: UVR-MDX-NET Inst sulla VOCE = split lead/coretto (metodo utente).
-# Default Inst_HQ_3 (PRE-scaricato nell'immagine). Per l'ESATTO Inst_1 usato in UVR:
-# env LEADBACK_MODEL=UVR-MDX-NET-Inst_1.onnx (va reso disponibile ad audio-separator).
-LEADBACK_MODEL = os.environ.get("LEADBACK_MODEL", "UVR-MDX-NET-Inst_HQ_3.onnx")
+# STADIO 2: estrazione voci complete (BS-Roformer, ottimo vocal separator).
+VOICE_MODEL = os.environ.get("VOICE_MODEL", "model_bs_roformer_ep_317_sdr_12.9755.ckpt")
+# STADIO 3: split lead/coretto = KARAOKE Roformer (metodo mvsep). Roformer = NATIVO.
+LEADBACK_MODEL = os.environ.get("LEADBACK_MODEL", "mel_band_roformer_karaoke_gabox_v2.ckpt")
 
 
 def _wavs():
@@ -94,7 +88,6 @@ def _sep(args, descr):
 
 
 def _sep_safe(args, descr):
-    """Come _sep ma NON solleva: ritorna False se la separazione fallisce."""
     try:
         _sep(args, descr)
         return True
@@ -104,7 +97,6 @@ def _sep_safe(args, descr):
 
 
 def _rms_db(path):
-    """RMS medio (dB) via ffmpeg volumedetect. None se non misurabile."""
     try:
         r = subprocess.run(["ffmpeg", "-i", str(path), "-af", "volumedetect",
                             "-f", "null", "-"], capture_output=True, text=True)
@@ -117,52 +109,44 @@ def _rms_db(path):
 
 
 _base = OUTDIR / "_base.wav"
-_full = OUTDIR / "_full.wav"
-_lead1 = OUTDIR / "_lead1.wav"
-_coro = OUTDIR / "_coro.wav"
+_fullvox = OUTDIR / "_fullvox.wav"
+_coro = OUTDIR / "_coretto.wav"
 _lead = OUTDIR / "lead_riferimento.wav"
 _out_base = OUTDIR / "base_piu_cori.wav"
 
-# === STADIO 1: KARAOKE ensemble sul mix -> base piena + voce completa ===
+# === STADIO 1: KARAOKE ensemble sul mix -> BASE PIENA ===
 _before = _wavs()
 args = [INPUT, "-m", KARAOKE_MODEL]
 if KARAOKE_EXTRA:
     args += ["--extra_models", KARAOKE_EXTRA]
-if not _sep_safe(args, f"[1/3] KARAOKE ensemble ({KARAOKE_MODEL} + {KARAOKE_EXTRA})"):
-    # fallback: solo modello principale
+if not _sep_safe(args, f"[1/3] KARAOKE ensemble ({KARAOKE_MODEL} + {KARAOKE_EXTRA}) -> base piena"):
     _sep([INPUT, "-m", KARAOKE_MODEL], f"[1/3-fallback] KARAOKE ({KARAOKE_MODEL})")
 _new = _wavs() - _before
 _grab(_new, "(Instrumental)", _base, "BASE PIENA (karaoke), temp")
-_grab(_new, "(Vocals)", _full, "VOCE completa (lead+coretto), temp")
 _cleanup(_new)
 
-# === STADIO 2: Inst sulla VOCE -> lead (1a) + CORETTO ===
-if _full.exists():
-    _before = _wavs()
-    if _sep_safe([str(_full), "-m", LEADBACK_MODEL], f"[2/3] Inst ({LEADBACK_MODEL}) sulla voce -> lead + CORETTO"):
-        _new = _wavs() - _before
-        _grab(_new, "(Vocals)", _lead1, "lead 1a passata, temp")
-        _grab(_new, "(Instrumental)", _coro, "CORETTO isolato -> va nella base")
-        _cleanup(_new)
-else:
-    print("ATTENZIONE: voce completa mancante -> niente stadio 2")
+# === STADIO 2: BS-Roformer sul mix -> VOCI complete (lead+coretto) ===
+_before = _wavs()
+if _sep_safe([INPUT, "-m", VOICE_MODEL], f"[2/3] BS-Roformer ({VOICE_MODEL}) -> voci complete"):
+    _new = _wavs() - _before
+    _grab(_new, "(Vocals)", _fullvox, "VOCI complete (lead+coretto), temp")
+    _cleanup(_new)
 
-# === STADIO 3: Inst sul lead (2a passata) -> LEAD PULITO ===
-if _lead1.exists():
+# === STADIO 3: KARAOKE Roformer sulle voci -> LEAD + CORETTO (metodo mvsep) ===
+if _fullvox.exists():
     _before = _wavs()
-    if _sep_safe([str(_lead1), "-m", LEADBACK_MODEL], "[3/3] Inst sulla voce (2a passata) -> LEAD PULITO"):
+    if _sep_safe([str(_fullvox), "-m", LEADBACK_MODEL], f"[3/3] KARAOKE Roformer ({LEADBACK_MODEL}) su voci -> lead + CORETTO"):
         _new = _wavs() - _before
         if not _grab(_new, "(Vocals)", _lead, "LEAD PULITO, per allineamento"):
-            shutil.copy(_lead1, _lead)
+            shutil.copy(_fullvox, _lead)
+        _grab(_new, "(Instrumental)", _coro, "CORETTO (backing) -> va nella base")
         _cleanup(_new)
     else:
-        shutil.copy(_lead1, _lead)
-elif _full.exists():
-    shutil.copy(_full, _lead)   # fallback estremo
+        shutil.copy(_fullvox, _lead)
+else:
+    print("ATTENZIONE: voci complete mancanti -> niente split lead/coretto")
 
-# === REMIX: base_piu_cori = base piena + coretto ===
-# Se il coretto e' ~silenzioso (cori gia' nella base / self-overdub assente) non
-# aggiunge nulla di udibile: auto-bilanciato.
+# === REMIX: base + coretto (se udibile) ===
 _coro_ok = _coro.exists() and ((_rms_db(_coro) or -99) > -60)
 if _base.exists() and _coro_ok:
     print("\n=== REMIX: base piena + coretto -> base_piu_cori.wav ===")
@@ -176,8 +160,11 @@ elif _base.exists():
     shutil.copy(_base, _out_base)
     print("  -> base_piu_cori.wav (solo base: coretto assente/silenzioso)")
 
-# pulizia temporanei
-for _t in (_base, _full, _lead1, _coro):
+if not _lead.exists() and _base.exists():
+    # fallback estremo: se manca del tutto la voce, non lasciare senza lead
+    pass
+
+for _t in (_base, _fullvox, _coro):
     try:
         _t.unlink()
     except Exception:
