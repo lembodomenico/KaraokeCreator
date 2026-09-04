@@ -218,6 +218,9 @@ def _pulisci_base():
     if salvati:
         print("   %d mezzi secondi lasciati com'erano (li' toglieva piu' di "
               "%.0f dB: musica, non brusio)" % (salvati, tetto))
+        # rimettendo pezzi dell'originale il livello si e' spostato un po':
+        # si ritara adesso, se no la base non esce col volume di partenza
+        DOPO = DOPO * (10 ** ((liv(PRIMA) - liv(DOPO)) / 20.0))
     print("   base %.2f dB -> %.2f dB" % (liv(PRIMA), liv(DOPO)))
 
     grezzo = np.clip(DOPO, -1.0, 1.0).astype(np.float32).tobytes()
