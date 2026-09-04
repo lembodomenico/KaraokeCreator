@@ -184,6 +184,40 @@ def _pulisci_base():
         return 20 * np.log10(float(np.sqrt((x ** 2).mean())) + 1e-12)
 
     DOPO = DOPO * (10 ** ((liv(PRIMA) - liv(DOPO)) / 20.0))
+
+    # ⭐ GUARDIA: TOGLIERE IL BRUSIO NON PUO' SVUOTARE LA MUSICA.
+    #
+    # Il residuo di voce sta una ventina di dB SOTTO la musica: portarlo via
+    # puo' far calare quel mezzo secondo di un dB, non di venti. Se il calo e'
+    # grosso, il separatore ha scambiato uno STRUMENTO per voce.
+    #
+    # Misurato: sulla Nannini nei primi 4 secondi - dove il canto non e' ancora
+    # cominciato, il testo parte a 8,6 s - la base calava di 21,3 dB, 8,7 e 3,5.
+    # Era l'intro strumentale che spariva. Su Afterhours la guardia salva anche
+    # i cori: da -2,86 dB a -0,66.
+    #
+    # Dove il calo supera il tetto si tiene la base com'era: meglio un filo di
+    # brusio che un pezzo di musica in meno.
+    #
+    # ⭐ La soglia e' 2 dB, non 3: a 3 dB su Afterhours un attacco di coro
+    #    calava ancora di 2,89 dB (restava appena sotto). A 2 dB tutti e
+    #    quattro i tratti di coro restano a +0,00 dB, e la voce del solista
+    #    resta comunque a ZERO.
+    W = int(SR * 0.5)
+    tetto = float(os.environ.get("TETTO_CALO", "2.0"))
+    salvati = 0
+    for i in range(0, n - W + 1, W):
+        a, b = PRIMA[i:i + W], DOPO[i:i + W]
+        ea = float(np.sqrt((a ** 2).mean()))
+        eb = float(np.sqrt((b ** 2).mean()))
+        if ea < 1e-6:
+            continue
+        if 20 * np.log10((eb + 1e-12) / (ea + 1e-12)) < -tetto:
+            DOPO[i:i + W] = a
+            salvati += 1
+    if salvati:
+        print("   %d mezzi secondi lasciati com'erano (li' toglieva piu' di "
+              "%.0f dB: musica, non brusio)" % (salvati, tetto))
     print("   base %.2f dB -> %.2f dB" % (liv(PRIMA), liv(DOPO)))
 
     grezzo = np.clip(DOPO, -1.0, 1.0).astype(np.float32).tobytes()
