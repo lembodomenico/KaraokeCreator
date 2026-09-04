@@ -59,6 +59,9 @@ RUN CS="$(python -c "import os,audio_separator; print(os.path.dirname(audio_sepa
 RUN audio-separator --download_model_only -m UVR-MDX-NET-Inst_HQ_3.onnx || true
 RUN audio-separator --download_model_only -m mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt || true
 RUN audio-separator --download_model_only -m mel_band_roformer_karaoke_gabox_v2.ckpt || true
+# Pulizia della base: htdemucs toglie la voce rimasta dentro alla base+cori.
+# Pre-scaricato qui, se no si scarica a ogni run e allunga il cold start.
+RUN audio-separator --download_model_only -m htdemucs.yaml || true
 # VOCE di allineamento = lead+CORI (niente buchi nei ritornelli corali): modello
 # VOCALE standard BS-Roformer (Vocals = tutte le voci). Pre-scaricato qui.
 RUN audio-separator --download_model_only -m model_bs_roformer_ep_317_sdr_12.9755.ckpt || true
