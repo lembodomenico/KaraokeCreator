@@ -35,7 +35,7 @@ RUN pip install --no-cache-dir "torch==2.8.0" "torchvision==0.23.0" "torchaudio=
 # audioread: audio-separator riceve input .mp3; soundfile NON legge mp3 -> librosa
 # ripiega su audioread (backend ffmpeg, gia' installato). Senza -> ModuleNotFoundError
 # 'audioread' e la separazione muore subito (exit 1 in ~20s). Va installato esplicitamente.
-RUN pip install --no-cache-dir --ignore-installed cryptography "audio-separator[gpu]" audioread runpod requests boto3
+RUN pip install --no-cache-dir --ignore-installed cryptography "audio-separator[gpu]==0.47.0" audioread runpod requests boto3
 # Forza onnxruntime-gpu compatibile CUDA 12.x (1.19.2 supporta cu12).
 RUN pip uninstall -y onnxruntime onnxruntime-gpu || true \
     && pip install --no-cache-dir onnxruntime-gpu==1.19.2
