@@ -15,10 +15,10 @@ RUN mkdir -p /opt/bsr /opt/modelli/as /opt/modelli/wbert \
     && printf '#!/bin/sh\nLD_LIBRARY_PATH=%s/usr/local/cuda/lib64:$LD_LIBRARY_PATH exec %s "$@"\n' "$LIBS" "$CLI" \
        > /usr/local/bin/bs_roformer-cli && chmod +x /usr/local/bin/bs_roformer-cli
 
-RUN pip install --ignore-installed "torch==2.8.0" "torchaudio==2.8.0" --index-url https://download.pytorch.org/whl/cu128
+RUN pip install --ignore-installed "torch==2.8.0" "torchvision==0.23.0" "torchaudio==2.8.0" --index-url https://download.pytorch.org/whl/cu128
 RUN pip install --ignore-installed "audio-separator[gpu]" audioread soundfile numpy requests runpod \
         "transformers==4.46.3" huggingface_hub safetensors \
-    && pip install --force-reinstall --no-deps "torch==2.8.0" "torchaudio==2.8.0" --index-url https://download.pytorch.org/whl/cu128
+    && pip install --force-reinstall --no-deps "torch==2.8.0" "torchvision==0.23.0" "torchaudio==2.8.0" --index-url https://download.pytorch.org/whl/cu128
 RUN CS="$(python -c "import os,audio_separator; print(os.path.dirname(audio_separator.__file__))")/separator/common_separator.py" \
     && sed -i 's/librosa\.get_duration(filename=/librosa.get_duration(path=/g' "$CS"
 
@@ -36,5 +36,6 @@ RUN cd /opt/modelli \
     && sha256sum -c s.txt && rm s.txt && ls -la /opt/modelli
 
 COPY kdkc.py /app/
-RUN python -c "import ast, transformers, torchaudio.functional, audio_separator.separator, runpod; ast.parse(open('/app/kdkc.py').read()); print('import OK')"
+# controllo VERO: carica le classi che usa kdkc (il 18-10 torchvision diverso da torch rompeva w2v-bert solo in esecuzione)
+RUN python -c "import ast, torch, torchvision, torchaudio.functional, audio_separator.separator, runpod; from transformers import Wav2Vec2BertForCTC, Wav2Vec2BertProcessor; from audio_separator.separator import Separator; print(torch.__version__, torchvision.__version__); ast.parse(open('/app/kdkc.py').read()); print('import OK')"
 CMD ["python", "-u", "/app/kdkc.py"]
