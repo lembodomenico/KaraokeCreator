@@ -1,6 +1,6 @@
 name: immagine
 # Il builder GitHub di RunPod si ferma dopo "Creating cache directory" (da un mese): l'immagine si costruisce qui
-# e RunPod la scarica gia' pronta da ghcr.io.
+# e RunPod la scarica gia' pronta da ghcr.io. SOLO il metodo nuovo (Dockerfile.kdkc), il worker vecchio non si tocca.
 on:
   push:
     branches: [main]
@@ -27,8 +27,8 @@ jobs:
       - name: build e push
         run: |
           IMG=ghcr.io/lembodomenico/karaokecreator
-          docker build --label org.opencontainers.image.source=https://github.com/lembodomenico/KaraokeCreator \
-            -t $IMG:${GITHUB_SHA::7} -t $IMG:latest .
+          docker build -f Dockerfile.kdkc --label org.opencontainers.image.source=https://github.com/lembodomenico/KaraokeCreator \
+            -t $IMG:kdkc-${GITHUB_SHA::7} -t $IMG:kdkc .
           df -h /
-          docker push $IMG:${GITHUB_SHA::7}
-          docker push $IMG:latest
+          docker push $IMG:kdkc-${GITHUB_SHA::7}
+          docker push $IMG:kdkc

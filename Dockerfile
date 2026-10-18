@@ -80,30 +80,6 @@ COPY lam/ /app/lam/
 RUN pip install --no-cache-dir faster-whisper
 RUN python -c "from faster_whisper import WhisperModel; WhisperModel('large-v3-turbo', device='cpu', compute_type='int8')" || true
 
-# --- PAGINA NUOVA (riserva di Modal, stesso metodo: strada J + w2v-bert CTC) -> kdkc.py, job con "op" ---
-ARG BSR=https://github.com/chenmozhijin/BSRoformer.cpp/releases/download/v0.1.0/BSRoformer-linux-cuda-12.9.1.tar.xz
-RUN apt-get update && apt-get install -y --no-install-recommends curl xz-utils && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /opt/bsr /opt/modelli/as /opt/modelli/wbert \
-    && curl -sL "$BSR" | tar -xJ -C /opt/bsr \
-    && CLI="$(find /opt/bsr -name bs_roformer-cli -type f | head -1)" && chmod +x "$CLI" \
-    && LIBS="$(find /opt/bsr -name '*.so*' -printf '%h\n' | sort -u | tr '\n' ':')" \
-    && printf '#!/bin/sh\nLD_LIBRARY_PATH=%s/usr/local/cuda/lib64:$LD_LIBRARY_PATH exec %s "$@"\n' "$LIBS" "$CLI" \
-       > /usr/local/bin/bs_roformer-cli && chmod +x /usr/local/bin/bs_roformer-cli
-RUN audio-separator --download_model_only -m htdemucs_ft.yaml --model_file_dir /opt/modelli/as && ls /opt/modelli/as
-RUN pip install --no-cache-dir huggingface_hub safetensors \
-    && python -c "from huggingface_hub import snapshot_download as s; s('mrfakename/w2v-bert-2.0-music-lyrics-ctc', local_dir='/opt/modelli/wbert')"
-# GGUF FP32 (gli stessi del Volume Modal) dal server KC, controllati con lo sha256
-ARG KDM=https://karaokecreator.karadom.it/kdkc_m7f3a9
-RUN cd /opt/modelli \
-    && curl -sfL -o karaoke_aufr33.gguf "$KDM/karaoke_aufr33-FP32.gguf" \
-    && curl -sfL -o karaoke_gabox.gguf "$KDM/karaoke_gabox_v2-FP32.gguf" \
-    && curl -sfL -o voce_anvuew.gguf "$KDM/voce_anvuew-FP32.gguf" \
-    && echo "7a6f0b045f9973cb9c9601332282b27137b9811296f0941f1fe8cb30bae2fe26  karaoke_aufr33.gguf" > s.txt \
-    && echo "b3b6d2d1512c732abc0611c021b96dbf63d16dfd6857551d609ee5a40df2d21a  karaoke_gabox.gguf" >> s.txt \
-    && echo "0bb8f352d5d3731b387a85451a8db0bd928e3687f643c087bc301dc07fcb94da  voce_anvuew.gguf" >> s.txt \
-    && sha256sum -c s.txt && rm s.txt && ls -la /opt/modelli
-COPY kdkc.py /app/
-
 # Codice: pipeline snella + handler + loader hotpatch. NIENTE accordi.py.
 COPY pipeline.py rp_handler.py _hotpatch.py /app/
 # REDIRECT FTP a prova di tutto: qualunque destinazione FTP cablata in una eventuale

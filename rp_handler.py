@@ -156,9 +156,6 @@ def whisper_transcribe(vocals_path: str, lang=None) -> str:
 def handler(job: dict) -> dict:
     job_id = job.get("id", uuid.uuid4().hex[:12])
     inp = job.get("input", {}) or {}
-    if inp.get("op"):          # PAGINA NUOVA: riserva di Modal, stesso metodo (kdkc.py)
-        import kdkc
-        return kdkc.handler(job)
     # Override della destinazione FTP dall'input del job (il server passa i valori
     # correnti: cosi' si puo' spostare lo storage senza toccare l'env dell'endpoint).
     global FTP_HOST, FTP_USER, FTP_PASS, FTP_DIR, PUBLIC_BASE_URL
