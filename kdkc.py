@@ -203,8 +203,8 @@ def _carica16(audio):
     return sf.read(b, dtype='float32')[0]
 
 
-def _emissioni(x, core=30.0, ctx=2.0):
-    """log-prob a 50 Hz su finestre da 30 s con 2 s di contorno per lato; si tiene il centro."""
+def _emissioni(x, core=18.0, ctx=2.0):
+    """log-prob a 50 Hz su finestre da 18 s con 2 s di contorno per lato; si tiene il centro. 30 s NO (19-10): il modello su certe finestre da 30+ s va muto (L italiano 28-62 s: niente); banco studio 21 brani entro 0,3 s 78,8% -> 84,6%."""
     import torch
     m = ctc()
     c, k, out = int(core * CTC_SR), int(ctx * CTC_SR), []
